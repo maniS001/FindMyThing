@@ -3,12 +3,16 @@ import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
     ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView
 } from 'react-native';
-import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight } from 'lucide-react-native';
+import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight, ChevronDown } from 'lucide-react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_URL } from '../../constants/api';
 import { showAlert } from '../../utils/alert';
+import * as Contacts from 'expo-contacts';
+import * as SMS from 'expo-sms';
+import * as Sharing from 'expo-sharing';
+
 
 type TabType = 'MY' | 'JOIN' | 'REQUESTS';
 
@@ -37,6 +41,25 @@ export default function CommunitiesScreen() {
     const [selectedCommId, setSelectedCommId] = useState<string | null>(null);
     const [memberIdentifier, setMemberIdentifier] = useState('');
     const [addingMember, setAddingMember] = useState(false);
+
+    // New Add Member States
+    const COUNTRIES = [
+        { code: '+91', country: 'India', flag: '🇮🇳' },
+        { code: '+1', country: 'USA/Canada', flag: '🇺🇸' },
+        { code: '+44', country: 'UK', flag: '🇬🇧' },
+        { code: '+61', country: 'Australia', flag: '🇦🇺' },
+        { code: '+971', country: 'UAE', flag: '🇦🇪' },
+        { code: '+65', country: 'Singapore', flag: '🇸🇬' },
+    ];
+    const [selectedCountry, setSelectedCountry] = useState(COUNTRIES[0]);
+    const [showCountryPicker, setShowCountryPicker] = useState(false);
+    const [missingUsers, setMissingUsers] = useState<string[]>([]);
+    
+    // Contact picker states
+    const [contactModalVisible, setContactModalVisible] = useState(false);
+    const [contactsList, setContactsList] = useState<Contacts.Contact[]>([]);
+    const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
+    const [loadingContacts, setLoadingContacts] = useState(false);
 
     // Join request loading state per community
     const [joiningId, setJoiningId] = useState<string | null>(null);
@@ -165,25 +188,99 @@ export default function CommunitiesScreen() {
         }
     };
 
-    const handleAddMember = async () => {
-        if (!selectedCommId || !memberIdentifier.trim()) return;
+    const handleAddMemberBulk = async (phones: string[]) => {
+        if (!selectedCommId || phones.length === 0) return;
         setAddingMember(true);
         try {
-            const res = await fetch(`${API_URL}/communities/${selectedCommId}/members`, {
+            const res = await fetch(`${API_URL}/communities/${selectedCommId}/members/bulk`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ identifier: memberIdentifier.trim() })
+                body: JSON.stringify({ identifiers: phones })
             });
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Failed to add member');
-            setMemberIdentifier('');
-            setMemberModalVisible(false);
+            if (!res.ok) throw new Error(data.error || 'Failed to add members');
+            
+            if (data.notFound && data.notFound.length > 0) {
+                setMissingUsers(data.notFound);
+            } else {
+                setMemberModalVisible(false);
+                setMemberIdentifier('');
+            }
             fetchMyComms();
-            showAlert('Success', 'Member added!');
+            if (data.added && data.added.length > 0) showAlert('Success', `Added ${data.added.length} members!`);
+            else if (!data.notFound || data.notFound.length === 0) showAlert('Info', 'Selected users were already in the community.');
         } catch (e: any) {
             showAlert('Error', e.message);
         } finally {
             setAddingMember(false);
+        }
+    };
+
+    const handleManualAdd = () => {
+        if (!memberIdentifier.trim()) return;
+        const phone = (selectedCountry.code + memberIdentifier).replace(/\s+/g, '');
+        handleAddMemberBulk([phone]);
+    };
+
+    const loadContacts = async () => {
+        setLoadingContacts(true);
+        const { status } = await Contacts.requestPermissionsAsync();
+        if (status === 'granted') {
+            const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers] });
+            if (data.length > 0) {
+                // Filter contacts with phone numbers
+                const validContacts = data.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
+                setContactsList(validContacts);
+                setContactModalVisible(true);
+            } else {
+                showAlert('Info', 'No contacts found.');
+            }
+        } else {
+            showAlert('Error', 'Contacts permission denied.');
+        }
+        setLoadingContacts(false);
+    };
+
+    const toggleContactSelection = (phone: string) => {
+        const newSet = new Set(selectedContacts);
+        if (newSet.has(phone)) newSet.delete(phone);
+        else newSet.add(phone);
+        setSelectedContacts(newSet);
+    };
+
+    const submitContacts = () => {
+        const phones = Array.from(selectedContacts).map(p => p.replace(/[^0-9+]/g, ''));
+        setContactModalVisible(false);
+        setSelectedContacts(new Set());
+        if (phones.length > 0) {
+            handleAddMemberBulk(phones);
+        }
+    };
+
+    const handleSendInviteSMS = async () => {
+        const isAvailable = await SMS.isAvailableAsync();
+        if (isAvailable && missingUsers.length > 0) {
+            const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+            await SMS.sendSMSAsync(
+                missingUsers,
+                `Hey! Join my community on FindMate to stay updated. Download the app here: ${link}`
+            );
+            setMissingUsers([]);
+            setMemberModalVisible(false);
+            setMemberIdentifier('');
+        } else {
+            showAlert('Error', 'SMS is not available on this device');
+        }
+    };
+
+    const handleShareWhatsAppLink = async () => {
+        const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+        try {
+            await Sharing.shareAsync(link, {
+                dialogTitle: 'Share Community Invite Link'
+            });
+        } catch (e) {
+            console.log(e);
         }
     };
 
@@ -425,38 +522,151 @@ export default function CommunitiesScreen() {
             <Modal visible={memberModalVisible} transparent animationType="slide" onRequestClose={() => setMemberModalVisible(false)}>
                 <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
                     <View style={styles.modalOverlay}>
-                        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+                        <View style={[styles.modalContent, { backgroundColor: colors.surface, maxHeight: '80%' }]}>
                             <View style={styles.modalHeader}>
-                                <Text style={[styles.modalTitle, { color: colors.text }]}>Add Member</Text>
-                                <TouchableOpacity onPress={() => setMemberModalVisible(false)}>
+                                <Text style={[styles.modalTitle, { color: colors.text }]}>Add Members</Text>
+                                <TouchableOpacity onPress={() => { setMemberModalVisible(false); setMissingUsers([]); }}>
                                     <X size={20} color={colors.textSecondary} />
                                 </TouchableOpacity>
                             </View>
-                            <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
-                                Enter the registered phone number to add them directly.
-                            </Text>
-                            <TextInput
-                                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.background }]}
-                                placeholder="Phone Number (e.g. +919876543210)"
-                                placeholderTextColor={colors.textSecondary}
-                                value={memberIdentifier}
-                                onChangeText={setMemberIdentifier}
-                                autoCapitalize="none"
-                                autoFocus
-                                returnKeyType="done"
-                                onSubmitEditing={handleAddMember}
-                            />
-                            <View style={styles.btnRow}>
-                                <TouchableOpacity style={[styles.btn, { backgroundColor: colors.border, flex: 1 }]} onPress={() => setMemberModalVisible(false)}>
-                                    <Text style={{ color: colors.text, textAlign: 'center' }}>Cancel</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary, flex: 1 }]} onPress={handleAddMember} disabled={addingMember}>
-                                    <Text style={{ color: 'white', textAlign: 'center', fontWeight: '600' }}>{addingMember ? 'Adding...' : 'Add Member'}</Text>
-                                </TouchableOpacity>
-                            </View>
+
+                            {missingUsers.length > 0 ? (
+                                <View style={{ paddingVertical: 20 }}>
+                                    <Text style={{ color: colors.text, fontSize: 16, marginBottom: 12, fontWeight: 'bold' }}>
+                                        {missingUsers.length} people are not on FindMate!
+                                    </Text>
+                                    <Text style={{ color: colors.textSecondary, marginBottom: 20, lineHeight: 22 }}>
+                                        Send them an invite link so they can download the app and join the community automatically.
+                                    </Text>
+                                    <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary, marginBottom: 10 }]} onPress={handleSendInviteSMS}>
+                                        <Text style={{ color: 'white', textAlign: 'center', fontWeight: '600', fontSize: 16 }}>Send Invite via SMS</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity style={[styles.btn, { backgroundColor: colors.border }]} onPress={() => { setMissingUsers([]); setMemberModalVisible(false); }}>
+                                        <Text style={{ color: colors.text, textAlign: 'center', fontWeight: '600', fontSize: 16 }}>Skip</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            ) : (
+                                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+                                    <Text style={[styles.modalSub, { color: colors.textSecondary }]}>
+                                        Add members manually or generate an invite link.
+                                    </Text>
+                                    
+                                    <View style={styles.phoneInputContainer}>
+                                        <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Manual Entry</Text>
+                                        <View style={[styles.phoneRow, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                                            <TouchableOpacity style={styles.countryPickerButton} onPress={() => setShowCountryPicker(true)}>
+                                                <Text style={[styles.countryCodeText, { color: colors.text }]}>{selectedCountry.flag} {selectedCountry.code}</Text>
+                                                <ChevronDown size={16} color={colors.textSecondary} style={{ marginLeft: 6 }} />
+                                            </TouchableOpacity>
+                                            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                                            <TextInput
+                                                style={[styles.phoneTextInput, { color: colors.text }]}
+                                                placeholder="Phone Number"
+                                                placeholderTextColor={colors.textSecondary}
+                                                keyboardType="phone-pad"
+                                                value={memberIdentifier}
+                                                onChangeText={setMemberIdentifier}
+                                                onSubmitEditing={handleManualAdd}
+                                            />
+                                        </View>
+                                        <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary, marginTop: 4 }]} onPress={handleManualAdd} disabled={addingMember}>
+                                            <Text style={{ color: 'white', textAlign: 'center', fontWeight: '600' }}>{addingMember ? 'Adding...' : 'Add Number'}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+
+                                    <View style={{ marginVertical: 20, flexDirection: 'row', alignItems: 'center' }}>
+                                        <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                                        <Text style={{ marginHorizontal: 10, color: colors.textSecondary, fontWeight: '600' }}>OR</Text>
+                                        <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
+                                    </View>
+
+                                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.border, marginBottom: 12, justifyContent: 'center' }]} onPress={loadContacts} disabled={loadingContacts}>
+                                        <Users size={20} color={colors.text} style={{ marginRight: 8 }} />
+                                        <Text style={{ color: colors.text, fontWeight: '600', fontSize: 16 }}>{loadingContacts ? 'Loading...' : 'Select from Phonebook'}</Text>
+                                    </TouchableOpacity>
+
+                                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#25D366', justifyContent: 'center' }]} onPress={handleShareWhatsAppLink}>
+                                        <Globe size={20} color="white" style={{ marginRight: 8 }} />
+                                        <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Share Link (WhatsApp)</Text>
+                                    </TouchableOpacity>
+                                </ScrollView>
+                            )}
                         </View>
                     </View>
                 </KeyboardAvoidingView>
+            </Modal>
+
+            {/* Country Picker Modal */}
+            <Modal visible={showCountryPicker} animationType="slide" transparent={true}>
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { backgroundColor: colors.surface, height: '60%' }]}>
+                        <View style={styles.modalHeader}>
+                            <Text style={[styles.modalTitle, { color: colors.text }]}>Select Country</Text>
+                            <TouchableOpacity onPress={() => setShowCountryPicker(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        <FlatList
+                            data={COUNTRIES}
+                            keyExtractor={(item) => item.code}
+                            renderItem={({ item }) => (
+                                <TouchableOpacity
+                                    style={{ flexDirection: 'row', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border, alignItems: 'center' }}
+                                    onPress={() => {
+                                        setSelectedCountry(item);
+                                        setShowCountryPicker(false);
+                                    }}
+                                >
+                                    <Text style={{ fontSize: 24, marginRight: 12 }}>{item.flag}</Text>
+                                    <Text style={{ fontSize: 16, color: colors.text, flex: 1 }}>{item.country}</Text>
+                                    <Text style={{ fontSize: 16, color: colors.textSecondary }}>{item.code}</Text>
+                                </TouchableOpacity>
+                            )}
+                        />
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Contacts Picker Modal */}
+            <Modal visible={contactModalVisible} animationType="slide" transparent={true}>
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { backgroundColor: colors.surface, height: '80%' }]}>
+                        <View style={styles.modalHeader}>
+                            <Text style={[styles.modalTitle, { color: colors.text }]}>Select Contacts</Text>
+                            <TouchableOpacity onPress={() => setContactModalVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        <FlatList
+                            data={contactsList}
+                            keyExtractor={(item, index) => item.id || String(index)}
+                            renderItem={({ item }) => {
+                                const phone = item.phoneNumbers?.[0]?.number || '';
+                                if (!phone) return null;
+                                const isSelected = selectedContacts.has(phone);
+                                return (
+                                    <TouchableOpacity
+                                        style={{ flexDirection: 'row', padding: 16, borderBottomWidth: 1, borderBottomColor: colors.border, alignItems: 'center' }}
+                                        onPress={() => toggleContactSelection(phone)}
+                                    >
+                                        <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: isSelected ? colors.primary : colors.border, backgroundColor: isSelected ? colors.primary : 'transparent', marginRight: 12, alignItems: 'center', justifyContent: 'center' }}>
+                                            {isSelected && <CheckCircle size={14} color="white" />}
+                                        </View>
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={{ fontSize: 16, color: colors.text, fontWeight: '500' }}>{item.name}</Text>
+                                            <Text style={{ fontSize: 14, color: colors.textSecondary }}>{phone}</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            }}
+                        />
+                        <TouchableOpacity style={[styles.btn, { backgroundColor: colors.primary, marginTop: 12 }]} onPress={submitContacts}>
+                            <Text style={{ color: 'white', textAlign: 'center', fontWeight: '600', fontSize: 16 }}>
+                                Add {selectedContacts.size} Contacts
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
             </Modal>
 
             {/* MY COMMUNITIES TAB */}
@@ -615,4 +825,11 @@ const styles = StyleSheet.create({
     empty: { alignItems: 'center', paddingTop: 70, gap: 12 },
     emptyTitle: { fontSize: 18, fontWeight: '700' },
     emptyText: { fontSize: 14, textAlign: 'center', lineHeight: 22 },
+    phoneInputContainer: { gap: 8, marginBottom: 8 },
+    inputLabel: { fontSize: 14, fontWeight: '500', marginLeft: 4 },
+    phoneRow: { flexDirection: 'row', borderWidth: 1, borderRadius: 12, height: 56, alignItems: 'center', overflow: 'hidden' },
+    countryPickerButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, height: '100%' },
+    countryCodeText: { fontSize: 16, fontWeight: '500' },
+    divider: { width: 1, height: '60%' },
+    phoneTextInput: { flex: 1, fontSize: 16, paddingHorizontal: 16, height: '100%' },
 });
