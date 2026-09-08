@@ -1653,27 +1653,47 @@ app.get('/api/users/me/communities', authenticateToken, async (req: any, res: an
     }
 });
 
-// Add Member to Community
-app.post('/api/communities/:id/members', authenticateToken, async (req: any, res: any) => {
+// Add Members to Community (Bulk)
+app.post('/api/communities/:id/members/bulk', authenticateToken, async (req: any, res: any) => {
     try {
         const { id } = req.params;
-        const { identifier } = req.body;
+        const { identifiers } = req.body; // Array of phone numbers
 
-        const userToAdd = await prisma.user.findFirst({
-            where: { phone: identifier }
-        });
+        if (!Array.isArray(identifiers)) {
+            return res.status(400).json({ error: "identifiers must be an array" });
+        }
 
-        if (!userToAdd) return res.status(404).json({ error: "User not found with this phone number" });
+        const added: string[] = [];
+        const alreadyMembers: string[] = [];
+        const notFound: string[] = [];
 
-        const existing = await prisma.communityMember.findFirst({
-            where: { communityId: id, userId: userToAdd.id }
-        });
-        if (existing) return res.status(400).json({ error: "Already a member" });
+        for (const phone of identifiers) {
+            const cleanPhone = phone.replace(/[^0-9+]/g, '');
+            const userToAdd = await prisma.user.findFirst({
+                where: { phone: cleanPhone }
+            });
 
-        const member = await prisma.communityMember.create({
-            data: { communityId: id, userId: userToAdd.id, role: 'MEMBER' }
-        });
-        res.json(member);
+            if (!userToAdd) {
+                notFound.push(phone);
+                continue;
+            }
+
+            const existing = await prisma.communityMember.findFirst({
+                where: { communityId: id, userId: userToAdd.id }
+            });
+
+            if (existing) {
+                alreadyMembers.push(phone);
+                continue;
+            }
+
+            await prisma.communityMember.create({
+                data: { communityId: id, userId: userToAdd.id, role: 'MEMBER' }
+            });
+            added.push(phone);
+        }
+
+        res.json({ added, alreadyMembers, notFound });
     } catch (e: any) {
         res.status(500).json({ error: e.message });
     }
