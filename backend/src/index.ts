@@ -620,9 +620,9 @@ app.post('/api/items', async (req, res) => {
         // Create the item
         const item = await prisma.item.create({
             data: {
-                name,
-                category,
-                location,
+                name: String(name).trim(),
+                category: String(category).trim(),
+                location: String(location).trim(),
                 date,
                 description,
                 contactInfo,
@@ -649,7 +649,7 @@ app.post('/api/items', async (req, res) => {
         if (matches.length > 0) {
             for (const match of matches) {
                 const complaint = match.complaint;
-                if (complaint.userId) {
+                if (complaint.userId && complaint.userId !== userId) {
                     const complaintUser = await prisma.user.findUnique({ where: { id: complaint.userId } });
                     
                     if (complaintUser) {
@@ -698,9 +698,9 @@ app.post('/api/complaints', async (req, res) => {
         const { name, category, location, date, description, contactInfo, imageUris, userId, cashPrize, latitude, longitude, notifyRadius, targetCommunityId, targetOrganizationId } = req.body;
         const complaint = await prisma.complaint.create({
             data: {
-                name,
-                category,
-                location,
+                name: String(name).trim(),
+                category: String(category).trim(),
+                location: String(location).trim(),
                 date,
                 description,
                 contactInfo,
@@ -817,11 +817,16 @@ app.get('/api/items', async (req, res) => {
         const { query, claimedBy, excludeClaimed, communityId, orgId, lat, lng, radius } = req.query;
         let where: any = {};
 
+        if (currentUser) {
+            where.userId = { not: currentUser.id };
+        }
+
         if (query) {
+            const q = String(query).trim();
             where.OR = [
-                { name: { contains: String(query), mode: 'insensitive' as const } },
-                { category: { contains: String(query), mode: 'insensitive' as const } },
-                { location: { contains: String(query), mode: 'insensitive' as const } },
+                { name: { contains: q, mode: 'insensitive' as const } },
+                { category: { contains: q, mode: 'insensitive' as const } },
+                { location: { contains: q, mode: 'insensitive' as const } },
             ];
         }
 
@@ -916,14 +921,33 @@ app.get('/api/items/:id', async (req, res) => {
 // List Complaints (with search)
 app.get('/api/complaints', async (req, res) => {
     try {
+        let currentUser: any = null;
+        const authHeader = req.headers['authorization'];
+        if (authHeader) {
+            const token = authHeader.split(' ')[1];
+            if (token) {
+                try {
+                    const decoded = jwt.verify(token, JWT_SECRET) as any;
+                    currentUser = await prisma.user.findUnique({ where: { id: decoded.id } });
+                } catch (e) {
+                    // Ignore, continue as guest
+                }
+            }
+        }
+
         const { query, communityId, orgId, lat, lng, radius } = req.query;
         let where: any = { status: 'OPEN' };
 
+        if (currentUser) {
+            where.userId = { not: currentUser.id };
+        }
+
         if (query) {
+            const q = String(query).trim();
             where.OR = [
-                { name: { contains: String(query), mode: 'insensitive' as const } },
-                { category: { contains: String(query), mode: 'insensitive' as const } },
-                { location: { contains: String(query), mode: 'insensitive' as const } },
+                { name: { contains: q, mode: 'insensitive' as const } },
+                { category: { contains: q, mode: 'insensitive' as const } },
+                { location: { contains: q, mode: 'insensitive' as const } },
             ];
         }
 
