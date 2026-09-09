@@ -2,7 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider as NavigationThemeProvider } fro
 import * as Notifications from 'expo-notifications';
 import { Stack, usePathname } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { View } from 'react-native';
+import { View, Platform } from 'react-native';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -29,6 +29,19 @@ function RootLayoutContent() {
 
   const [expoPushToken, setExpoPushToken] = useState('');
   const [notification, setNotification] = useState<Notifications.Notification | undefined>(undefined);
+  const lastNotificationResponse = Notifications.useLastNotificationResponse();
+  
+  useEffect(() => {
+    if (
+      lastNotificationResponse &&
+      lastNotificationResponse.notification.request.content.data?.url &&
+      lastNotificationResponse.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER
+    ) {
+      const url = lastNotificationResponse.notification.request.content.data.url as string;
+      const { router } = require('expo-router');
+      router.push(url);
+    }
+  }, [lastNotificationResponse]);
   const notificationListener = useRef<Notifications.Subscription>();
   const responseListener = useRef<Notifications.Subscription>();
 
@@ -97,18 +110,25 @@ function RootLayoutContent() {
     };
   }, []);
 
-  const navigationTheme = theme === 'dark' ? DarkTheme : DefaultTheme;
+  const baseTheme = theme === 'dark' ? DarkTheme : DefaultTheme;
+  const navigationTheme = {
+    ...baseTheme,
+    colors: {
+      ...baseTheme.colors,
+      background: colors.background,
+    },
+  };
 
   return (
     <NavigationThemeProvider value={navigationTheme}>
       <SafeAreaProvider>
         <View style={{ flex: 1, backgroundColor: colors.background }}>
-          <WebContainer>
+          <>
             <Stack
               screenOptions={{
                 headerShown: true,
                 header: () => <Header forceShow />,
-                contentStyle: { backgroundColor: colors.background }
+                contentStyle: { backgroundColor: colors.background, ...(Platform.OS === 'web' ? { maxWidth: 800, alignSelf: 'center', width: '100%' } : {}) }
               }}
             >
               <Stack.Screen name="index" />
@@ -118,7 +138,7 @@ function RootLayoutContent() {
               <Stack.Screen name="victim/results" />
               <Stack.Screen name="victim/claim/[id]" />
               <Stack.Screen name="founder/report" />
-              <Stack.Screen name="founder/complaints" options={{ headerShown: false }} />
+              <Stack.Screen name="founder/complaints" options={{ headerShown: false, contentStyle: { maxWidth: '100%', width: '100%' } }} />
               <Stack.Screen name="founder/complaint-detail" />
               <Stack.Screen name="success" options={{ headerShown: false }} />
               <Stack.Screen name="account" options={{ headerShown: false }} />
@@ -126,7 +146,7 @@ function RootLayoutContent() {
               <Stack.Screen name="about" options={{ headerShown: false }} />
               <Stack.Screen name="notifications" options={{ headerShown: false }} />
             </Stack>
-          </WebContainer>
+          </>
         </View>
       </SafeAreaProvider>
     </NavigationThemeProvider>

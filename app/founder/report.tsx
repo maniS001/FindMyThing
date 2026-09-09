@@ -1,7 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import * as Location from 'expo-location';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, ActivityIndicator } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, ActivityIndicator, Modal, FlatList, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
@@ -9,6 +9,7 @@ import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
 import { API_URL } from '../../constants/api';
+import { X, Phone } from 'lucide-react-native';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import { addItem } from '../../store';
@@ -21,7 +22,10 @@ export default function ReportFoundItem() {
     const [loading, setLoading] = useState(false);
     const [aiLoading, setAiLoading] = useState(false);
     const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
-    const [descError, setDescError] = useState('');
+    const [descError, setDescError] = useState<string | null>('');
+    const [matchModalVisible, setMatchModalVisible] = useState(false);
+    const [matchedComplaints, setMatchedComplaints] = useState<any[]>([]);
+    const [submitFinalLoading, setSubmitFinalLoading] = useState(false);
 
     const [comms, setComms] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
@@ -158,9 +162,38 @@ export default function ReportFoundItem() {
         } catch {
             // AI unavailable — allow
         }
-        setAiLoading(false);
+        
+        // Check for matches
+        try {
+            const matchRes = await fetch(`${API_URL}/items/preview-matches`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: form.name,
+                    category: form.category,
+                    location: form.location,
+                    date: date.toISOString().split('T')[0]
+                })
+            });
+            if (matchRes.ok) {
+                const matchData = await matchRes.json();
+                if (matchData.matches && matchData.matches.length > 0) {
+                    setMatchedComplaints(matchData.matches);
+                    setMatchModalVisible(true);
+                    setAiLoading(false);
+                    return; // Stop here, wait for user to interact with modal
+                }
+            }
+        } catch (e) {
+            console.log("Match preview failed", e);
+        }
 
-        setLoading(true);
+        setAiLoading(false);
+        submitFinalItem(false); // No matches, proceed normally
+    };
+
+    const submitFinalItem = async (skipNotifications: boolean) => {
+        setSubmitFinalLoading(true);
         try {
             let loc = null;
             if (notificationType === 'RADIUS') {
@@ -197,7 +230,9 @@ export default function ReportFoundItem() {
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? targetOrganizationId || undefined : undefined,
                 latitude: loc ? loc.coords.latitude : undefined,
                 longitude: loc ? loc.coords.longitude : undefined,
+                skipNotifications,
             });
+            setMatchModalVisible(false);
             router.push({
                 pathname: '/success',
                 params: { type: 'report' }
@@ -206,7 +241,7 @@ export default function ReportFoundItem() {
             console.error('Submit error:', error);
             showAlert('Error', 'Failed to report item. Please try again.');
         } finally {
-            setLoading(false);
+            setSubmitFinalLoading(false);
         }
     };
 
@@ -440,7 +475,59 @@ export default function ReportFoundItem() {
                     </View>
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            {/* Match Modal */}
+            <Modal visible={matchModalVisible} transparent animationType="slide">
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+                    <View style={{ backgroundColor: colors.surface, padding: 20, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%', width: '100%', maxWidth: 600, alignSelf: 'center' }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                            <Text style={{ color: colors.text, fontSize: 20, fontWeight: 'bold' }}>Potential Matches Found!</Text>
+                            <TouchableOpacity onPress={() => setMatchModalVisible(false)}>
+                                <X size={24} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        <Text style={{ color: colors.textSecondary, marginBottom: 16 }}>
+                            We found similar items reported as lost. You can contact them directly or notify all of them and submit your report.
+                        </Text>
+                        
+                        <FlatList
+                            data={matchedComplaints}
+                            keyExtractor={(item) => item.complaintId}
+                            renderItem={({ item }) => {
+                                const c = item.complaint;
+                                return (
+                                    <View style={{ backgroundColor: colors.background, padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.border }}>
+                                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <View style={{ flex: 1 }}>
+                                                <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>{c.name}</Text>
+                                                <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 4 }}>📍 {c.location}</Text>
+                                                <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 2 }}>📅 {new Date(c.date).toLocaleDateString()}</Text>
+                                            </View>
+                                            <TouchableOpacity 
+                                                style={{ backgroundColor: colors.primary, padding: 10, borderRadius: 50, marginLeft: 12 }}
+                                                onPress={() => Linking.openURL(`tel:${c.contactInfo}`)}
+                                            >
+                                                <Phone size={20} color="white" />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                );
+                            }}
+                            style={{ maxHeight: 300 }}
+                        />
+
+                        <TouchableOpacity 
+                            style={{ padding: 16, borderRadius: 12, alignItems: 'center', backgroundColor: colors.primary, marginTop: 16 }} 
+                            onPress={() => submitFinalItem(false)} 
+                            disabled={submitFinalLoading}
+                        >
+                            <Text style={{ color: 'white', fontSize: 16, fontWeight: '600' }}>{submitFinalLoading ? 'Submitting...' : 'Notify All & Submit Report'}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
+
     );
 }
 

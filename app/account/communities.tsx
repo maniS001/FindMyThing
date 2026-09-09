@@ -3,7 +3,7 @@ import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
     ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView
 } from 'react-native';
-import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight, ChevronDown } from 'lucide-react-native';
+import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight, ChevronDown, Share2 } from 'lucide-react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -12,6 +12,7 @@ import { showAlert } from '../../utils/alert';
 import * as Contacts from 'expo-contacts';
 import * as SMS from 'expo-sms';
 import * as Sharing from 'expo-sharing';
+import * as Clipboard from 'expo-clipboard';
 
 
 type TabType = 'MY' | 'JOIN' | 'REQUESTS';
@@ -273,7 +274,13 @@ export default function CommunitiesScreen() {
         }
     };
 
-    const handleShareWhatsAppLink = async () => {
+    const handleCopyLink = async () => {
+        const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+        await Clipboard.setStringAsync(link);
+        showAlert('Copied!', 'Community invite link copied to clipboard.');
+    };
+
+    const handleShareLink = async () => {
         const link = `https://findmate.vercel.app/join/${selectedCommId}`;
         try {
             await Sharing.shareAsync(link, {
@@ -585,9 +592,9 @@ export default function CommunitiesScreen() {
                                         <Text style={{ color: colors.text, fontWeight: '600', fontSize: 16 }}>{loadingContacts ? 'Loading...' : 'Select from Phonebook'}</Text>
                                     </TouchableOpacity>
 
-                                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#25D366', justifyContent: 'center' }]} onPress={handleShareWhatsAppLink}>
-                                        <Globe size={20} color="white" style={{ marginRight: 8 }} />
-                                        <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Share Link (WhatsApp)</Text>
+                                    <TouchableOpacity style={[styles.actionBtn, { backgroundColor: colors.primary, justifyContent: 'center' }]} onPress={handleShareLink}>
+                                        <Share2 size={20} color="white" style={{ marginRight: 8 }} />
+                                        <Text style={{ color: 'white', fontWeight: '600', fontSize: 16 }}>Share link to join</Text>
                                     </TouchableOpacity>
                                 </ScrollView>
                             )}
@@ -815,7 +822,7 @@ const styles = StyleSheet.create({
     btnRow: { flexDirection: 'row', gap: 12, marginTop: 4 },
     btn: { paddingVertical: 12, borderRadius: 10 },
     modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-    modalContent: { padding: 24, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+    modalContent: { padding: 24, borderTopLeftRadius: 24, borderTopRightRadius: 24, width: '100%', maxWidth: 600, alignSelf: 'center' },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
     modalTitle: { fontSize: 20, fontWeight: 'bold' },
     modalSub: { fontSize: 14, marginBottom: 16, lineHeight: 20 },

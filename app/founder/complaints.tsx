@@ -118,7 +118,7 @@ export default function ViewComplaints() {
                     params: { id: item.id }
                 })}
                 activeOpacity={0.9}
-                style={styles.cardWrapper}
+                style={[styles.cardWrapper, numColumns > 1 && { maxWidth: '48.5%' }]}
             >
                 <Card style={styles.card}>
                     {images.length > 0 ? (
@@ -194,9 +194,9 @@ export default function ViewComplaints() {
                 {/* Animated Search Container */}
                 <Animated.View 
                     onLayout={(e) => setSearchHeight(e.nativeEvent.layout.height)}
-                    style={{ transform: [{ translateY }], position: 'absolute', top: HEADER_HEIGHT, left: 0, right: 0, zIndex: 10, elevation: 10 }}
+                    style={{ transform: [{ translateY }], position: 'absolute', top: HEADER_HEIGHT, left: 0, right: 0, zIndex: 10, elevation: 10, alignItems: 'center' }}
                 >
-                    <View style={[styles.searchContainer, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+                    <View style={[styles.searchContainer, { width: '100%', maxWidth: 800, backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
                         <View style={styles.searchRow}>
                             <TextInput
                                 style={[styles.searchInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
@@ -320,6 +320,7 @@ export default function ViewComplaints() {
                         <ActivityIndicator size="large" color={colors.primary} />
                     </View>
                 ) : (
+                    <View style={{ flex: 1, width: '100%', maxWidth: 800, alignSelf: 'center' }}>
                     <Animated.FlatList
                         data={complaints}
                         renderItem={renderItem}
@@ -345,10 +346,11 @@ export default function ViewComplaints() {
                             </View>
                         }
                     />
+                    </View>
                 )}
 
                 <View style={[styles.bottomAction, { backgroundColor: colors.surface, borderBottomColor: colors.border, borderTopWidth: 1, position: 'absolute', bottom: 0, left: 0, right: 0 }]}>
-                    <SafeAreaView edges={['bottom']} style={{ width: '100%' }}>
+                    <SafeAreaView edges={['bottom']} style={{ width: '100%', maxWidth: 800 }}>
                         <TouchableOpacity
                             style={[styles.reportButton, { backgroundColor: colors.primary }]}
                             onPress={() => router.push('/founder/report')}

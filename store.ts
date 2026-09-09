@@ -60,7 +60,7 @@ export interface Notification {
 
 // ============= Item API =============
 
-export const addItem = async (item: Omit<Item, 'id' | 'createdAt'> | FormData) => {
+export const addItem = async (item: Omit<Item, 'id' | 'createdAt'> | FormData | any) => {
     try {
         const isFormData = item instanceof FormData;
         const headers: HeadersInit = isFormData ? {

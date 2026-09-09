@@ -147,6 +147,21 @@ export default function NotificationsScreen() {
             });
         };
 
+        const handleViewComplaint = () => {
+            if (payload.complaintId) {
+                router.push({
+                    pathname: '/founder/complaint-detail',
+                    params: { id: payload.complaintId }
+                });
+            }
+        };
+
+        const handleViewItem = () => {
+            if (payload.itemId) {
+                router.push(`/victim/claim/${payload.itemId}`);
+            }
+        };
+
         // Determine notification type for founder notifications
         const isFounderNotification = item.type === 'COMPLAINT_CLOSED' ||
             item.type === 'COMPLAINT_REOPENED' ||
@@ -196,15 +211,13 @@ export default function NotificationsScreen() {
                         {new Date(item.createdAt).toLocaleDateString()}
                     </Text>
 
-                    {isClaimRequest && (
+                    {(isClaimRequest || item.type === 'AREA_ALERT' || item.type === 'MATCH_ALERT') && (
                         <View style={styles.actionsContainer}>
-                            {isResolved ? (
-                                // Already resolved - show badge
+                            {isClaimRequest && isResolved ? (
                                 <View style={[styles.recoveredBadge, { backgroundColor: '#10B981' + '20' }]}>
                                     <Text style={[styles.recoveredText, { color: '#10B981' }]}>✓ Recovered</Text>
                                 </View>
-                            ) : isClosed ? (
-                                // Closed but not resolved - show only Raise Again
+                            ) : isClaimRequest && isClosed ? (
                                 <View style={styles.buttonRow}>
                                     <TouchableOpacity
                                         style={[styles.actionButton, { backgroundColor: colors.primary }]}
@@ -215,15 +228,28 @@ export default function NotificationsScreen() {
                                         <Text style={styles.actionButtonText}>Raise Again</Text>
                                     </TouchableOpacity>
                                 </View>
-                            ) : (
-                                // Open/Notified - show Verify & Claim
+                            ) : isClaimRequest ? (
                                 <TouchableOpacity
                                     style={[styles.claimButton, { backgroundColor: colors.primary }]}
                                     onPress={handleClaim}
                                 >
                                     <Text style={styles.claimButtonText}>Verify & Claim</Text>
                                 </TouchableOpacity>
-                            )}
+                            ) : item.type === 'AREA_ALERT' ? (
+                                <TouchableOpacity
+                                    style={[styles.claimButton, { backgroundColor: colors.primary, marginTop: 8 }]}
+                                    onPress={handleViewComplaint}
+                                >
+                                    <Text style={styles.claimButtonText}>View Complaint</Text>
+                                </TouchableOpacity>
+                            ) : item.type === 'MATCH_ALERT' ? (
+                                <TouchableOpacity
+                                    style={[styles.claimButton, { backgroundColor: colors.primary, marginTop: 8 }]}
+                                    onPress={handleViewItem}
+                                >
+                                    <Text style={styles.claimButtonText}>Claim now</Text>
+                                </TouchableOpacity>
+                            ) : null}
                         </View>
                     )}
                 </View>

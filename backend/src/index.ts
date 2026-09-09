@@ -610,9 +610,22 @@ app.delete('/api/notifications', authenticateToken, async (req: any, res) => {
 // ============= Existing Endpoints (Updated with userId optional) =============
 
 // Create Item (Updated to link user)
+
+// Preview matches without creating an item
+app.post('/api/items/preview-matches', async (req, res) => {
+    try {
+        const { name, category, location, date } = req.body;
+        const matches = await findMatchingComplaints({ name, category, location, date }, prisma);
+        res.json({ matches });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to preview matches' });
+    }
+});
+
 app.post('/api/items', async (req, res) => {
     try {
-        const { name, category, location, date, description, contactInfo, imageUri, imageUris, questions, userId, latitude, longitude, notifyRadius, targetCommunityId, targetOrganizationId } = req.body;
+        const { name, category, location, date, description, contactInfo, imageUri, imageUris, questions, userId, latitude, longitude, notifyRadius, targetCommunityId, targetOrganizationId, skipNotifications } = req.body;
 
         // Handle both imageUri (single) and imageUris (array)
         const images = imageUris || (imageUri ? [imageUri] : []);
@@ -646,7 +659,7 @@ app.post('/api/items', async (req, res) => {
         const matches = await findMatchingComplaints({ name, category, location, date }, prisma);
 
         // Create notification for matching complaints
-        if (matches.length > 0) {
+        if (matches.length > 0 && !skipNotifications) {
             for (const match of matches) {
                 const complaint = match.complaint;
                 if (complaint.userId && complaint.userId !== userId) {
@@ -670,7 +683,7 @@ app.post('/api/items', async (req, res) => {
                                 complaintUser.pushToken,
                                 'Possible Match Found! 🎉',
                                 `Someone found a "${item.name}" that matches your complaint. Check it out now!`,
-                                { url: `/victim/claim/${item.id}` }
+                                { url: `/account/notifications` }
                             );
                         }
                     }
@@ -776,7 +789,7 @@ app.post('/api/complaints', async (req, res) => {
                                 user.pushToken,
                                 'New Complaint',
                                 `Someone lost a "${name}" in ${location}. Check if you can help!`,
-                                { url: `/founder/complaint-detail?id=${complaint.id}` }
+                                { url: `/account/notifications` }
                             );
                         }
                     }
@@ -1184,7 +1197,7 @@ app.patch('/api/complaints/:id', async (req, res) => {
                                     founderUser.pushToken,
                                     'Complaint Reopened ⚠️',
                                     `The victim has reopened their complaint "${currentComplaint.name}". ${reopenReason || ''}`,
-                                    { url: `/founder/complaint-detail?id=${id}` }
+                                    { url: `/account/notifications` }
                                 );
                             }
                         }
@@ -1270,7 +1283,7 @@ app.post('/api/complaints/:id/resolve', authenticateToken, async (req: any, res)
                                 founderUser.pushToken,
                                 'Item Successfully Recovered! 🎉',
                                 messageText,
-                                { url: `/founder/complaint-detail?id=${id}` }
+                                { url: `/account/notifications` }
                             );
                         }
                     }
@@ -1415,7 +1428,7 @@ app.post('/api/complaints/:id/notify', authenticateToken, async (req: any, res) 
                 victimUser.pushToken,
                 'Someone found your item! 🎉',
                 `A founder has reached out regarding '${complaint.name}'. Open the app to view their message and claim your item.`,
-                { url: `/victim/claim/${finalItemId}` }
+                { url: `/account/notifications` }
             );
         }
 

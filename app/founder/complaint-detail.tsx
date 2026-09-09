@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Calendar, MapPin, Phone } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View, TouchableOpacity, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
@@ -190,7 +190,7 @@ export default function ComplaintDetail() {
 
                         <View style={styles.infoRow}>
                             <Phone size={20} color={colors.primary} />
-                            <View style={styles.infoContent}>
+                            <View style={[styles.infoContent, { flex: 1 }]}>
                                 <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Contact</Text>
                                 <Text style={[styles.infoValue, { color: colors.text }]}>
                                     {/* Show phone directly when payment is disabled OR when resolved */}
@@ -199,6 +199,14 @@ export default function ComplaintDetail() {
                                         : 'Start Notify to Connect'}
                                 </Text>
                             </View>
+                            {(isResolved || !CONFIG.ENABLE_PAYMENT) && complaint.contactInfo && (
+                                <TouchableOpacity 
+                                    style={{ backgroundColor: colors.primary, padding: 8, borderRadius: 50, marginLeft: 12 }}
+                                    onPress={() => Linking.openURL(`tel:${complaint.contactInfo}`)}
+                                >
+                                    <Phone size={18} color="white" />
+                                </TouchableOpacity>
+                            )}
                         </View>
                     </View>
 
