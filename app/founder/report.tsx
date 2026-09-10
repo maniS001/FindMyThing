@@ -496,21 +496,25 @@ export default function ReportFoundItem() {
                             renderItem={({ item }) => {
                                 const c = item.complaint;
                                 return (
-                                    <View style={{ backgroundColor: colors.background, padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.border }}>
+                                    <TouchableOpacity 
+                                        style={{ backgroundColor: colors.background, padding: 16, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: colors.border }}
+                                        activeOpacity={0.7}
+                                        onPress={() => {
+                                            setMatchModalVisible(false);
+                                            router.push({
+                                                pathname: '/founder/complaint-detail',
+                                                params: { id: item.complaintId }
+                                            });
+                                        }}
+                                    >
                                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <View style={{ flex: 1 }}>
                                                 <Text style={{ color: colors.text, fontSize: 16, fontWeight: '600' }}>{c.name}</Text>
                                                 <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 4 }}>📍 {c.location}</Text>
                                                 <Text style={{ color: colors.textSecondary, fontSize: 14, marginTop: 2 }}>📅 {new Date(c.date).toLocaleDateString()}</Text>
                                             </View>
-                                            <TouchableOpacity 
-                                                style={{ backgroundColor: colors.primary, padding: 10, borderRadius: 50, marginLeft: 12 }}
-                                                onPress={() => Linking.openURL(`tel:${c.contactInfo}`)}
-                                            >
-                                                <Phone size={20} color="white" />
-                                            </TouchableOpacity>
                                         </View>
-                                    </View>
+                                    </TouchableOpacity>
                                 );
                             }}
                             style={{ maxHeight: 300 }}

@@ -249,7 +249,9 @@ export const addComplaint = async (complaint: Omit<Complaint, 'id' | 'createdAt'
 
 export const getComplaints = async (): Promise<Complaint[]> => {
     try {
-        const response = await fetch(`${API_URL}/complaints`);
+        const token = await AsyncStorage.getItem('token');
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+        const response = await fetch(`${API_URL}/complaints`, { headers });
         if (!response.ok) throw new Error('Failed to fetch complaints');
         return await response.json();
     } catch (error) {
@@ -264,7 +266,9 @@ export const searchComplaints = async (query: string, communityId?: string, orgI
         if (query) params.append('query', query);
         if (communityId) params.append('communityId', communityId);
         if (orgId) params.append('orgId', orgId);
-        const response = await fetch(`${API_URL}/complaints?${params.toString()}`);
+        const token = await AsyncStorage.getItem('token');
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+        const response = await fetch(`${API_URL}/complaints?${params.toString()}`, { headers });
         if (!response.ok) throw new Error('Failed to search complaints');
         return await response.json();
     } catch (error) {

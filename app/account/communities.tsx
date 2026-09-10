@@ -4,6 +4,7 @@ import {
     ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView
 } from 'react-native';
 import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight, ChevronDown, Share2 } from 'lucide-react-native';
+import { Share } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -58,6 +59,7 @@ export default function CommunitiesScreen() {
     
     // Contact picker states
     const [contactModalVisible, setContactModalVisible] = useState(false);
+    const [contactSearchQuery, setContactSearchQuery] = useState('');
     const [contactsList, setContactsList] = useState<Contacts.Contact[]>([]);
     const [selectedContacts, setSelectedContacts] = useState<Set<string>>(new Set());
     const [loadingContacts, setLoadingContacts] = useState(false);
@@ -283,8 +285,10 @@ export default function CommunitiesScreen() {
     const handleShareLink = async () => {
         const link = `https://findmate.vercel.app/join/${selectedCommId}`;
         try {
-            await Sharing.shareAsync(link, {
-                dialogTitle: 'Share Community Invite Link'
+            await Share.share({
+                message: `Join my community on FindMate: ${link}`,
+                url: link,
+                title: 'Share Community Invite Link'
             });
         } catch (e) {
             console.log(e);
@@ -644,9 +648,18 @@ export default function CommunitiesScreen() {
                                 <X size={24} color={colors.textSecondary} />
                             </TouchableOpacity>
                         </View>
+                        <View style={{ paddingHorizontal: 20, paddingBottom: 10 }}>
+                            <TextInput
+                                style={{ backgroundColor: colors.background, color: colors.text, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.border }}
+                                placeholder="Search contacts..."
+                                placeholderTextColor={colors.textSecondary}
+                                value={contactSearchQuery}
+                                onChangeText={setContactSearchQuery}
+                            />
+                        </View>
                         <FlatList
-                            data={contactsList}
-                            keyExtractor={(item, index) => item.id || String(index)}
+                            data={contactsList.filter(c => !contactSearchQuery || (c.name && c.name.toLowerCase().includes(contactSearchQuery.toLowerCase())) || c.phoneNumbers?.[0]?.number?.includes(contactSearchQuery))}
+                            keyExtractor={(item, index) => String(index)}
                             renderItem={({ item }) => {
                                 const phone = item.phoneNumbers?.[0]?.number || '';
                                 if (!phone) return null;

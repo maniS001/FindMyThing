@@ -683,7 +683,7 @@ app.post('/api/items', async (req, res) => {
                                 complaintUser.pushToken,
                                 'Possible Match Found! 🎉',
                                 `Someone found a "${item.name}" that matches your complaint. Check it out now!`,
-                                { url: `/account/notifications` }
+                                { url: `/notifications` }
                             );
                         }
                     }
@@ -789,7 +789,7 @@ app.post('/api/complaints', async (req, res) => {
                                 user.pushToken,
                                 'New Complaint',
                                 `Someone lost a "${name}" in ${location}. Check if you can help!`,
-                                { url: `/account/notifications` }
+                                { url: `/notifications` }
                             );
                         }
                     }
@@ -1197,7 +1197,7 @@ app.patch('/api/complaints/:id', async (req, res) => {
                                     founderUser.pushToken,
                                     'Complaint Reopened ⚠️',
                                     `The victim has reopened their complaint "${currentComplaint.name}". ${reopenReason || ''}`,
-                                    { url: `/account/notifications` }
+                                    { url: `/notifications` }
                                 );
                             }
                         }
@@ -1283,7 +1283,7 @@ app.post('/api/complaints/:id/resolve', authenticateToken, async (req: any, res)
                                 founderUser.pushToken,
                                 'Item Successfully Recovered! 🎉',
                                 messageText,
-                                { url: `/account/notifications` }
+                                { url: `/notifications` }
                             );
                         }
                     }
@@ -1428,7 +1428,7 @@ app.post('/api/complaints/:id/notify', authenticateToken, async (req: any, res) 
                 victimUser.pushToken,
                 'Someone found your item! 🎉',
                 `A founder has reached out regarding '${complaint.name}'. Open the app to view their message and claim your item.`,
-                { url: `/account/notifications` }
+                { url: `/notifications` }
             );
         }
 
