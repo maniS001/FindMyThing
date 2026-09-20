@@ -91,7 +91,7 @@ export default function ChatScreen() {
     };
 
     const startCall = () => {
-        router.push({ pathname: '/call/[conversationId]', params: { conversationId, otherName, isInitiator: 'true' } });
+        (router as any).push({ pathname: '/call/[conversationId]', params: { conversationId, otherName, isInitiator: 'true' } });
     };
 
     const renderMessage = ({ item }: { item: Message }) => {

@@ -16,7 +16,7 @@ import { showAlert } from '../../utils/alert';
 export default function ComplaintDetail() {
     const { id, prefillFromItemId } = useLocalSearchParams<{ id: string; prefillFromItemId?: string }>();
     const { colors } = useTheme();
-    const { token } = useAuth();
+    const { token, user } = useAuth();
     const { width } = useWindowDimensions();
     // 24px padding on each side of ScrollView (48) + 16px padding on each side of Card (32) = 80px
     const IMAGE_WIDTH = Math.min(width - 80, 800); // cap max width for large screens
@@ -73,7 +73,7 @@ export default function ComplaintDetail() {
 
             setNotifyModalVisible(false);
             // Navigate to success screen
-            router.push({
+            (router as any).push({
                 pathname: '/success',
                 params: { type: 'notified' }
             });
@@ -86,7 +86,7 @@ export default function ComplaintDetail() {
 
 
     const handleMessage = async () => {
-        if (!complaint.userId || !token) return;
+        if (!complaint || !complaint.userId || !token) return;
         try {
             const res = await fetch(`${API_URL}/conversations`, {
                 method: 'POST',
@@ -94,12 +94,12 @@ export default function ComplaintDetail() {
                 body: JSON.stringify({ recipientId: complaint.userId, complaintId: complaint.id })
             });
             const conv = await res.json();
-            router.push({ pathname: '/chat/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User' } });
+            (router as any).push({ pathname: '/chat/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User' } });
         } catch { showAlert('Error', 'Failed to open chat'); }
     };
 
     const handleCall = async () => {
-        if (!complaint.userId || !token) return;
+        if (!complaint || !complaint.userId || !token) return;
         try {
             const res = await fetch(`${API_URL}/conversations`, {
                 method: 'POST',
@@ -107,7 +107,7 @@ export default function ComplaintDetail() {
                 body: JSON.stringify({ recipientId: complaint.userId, complaintId: complaint.id })
             });
             const conv = await res.json();
-            router.push({ pathname: '/call/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User', isInitiator: 'true' } });
+            (router as any).push({ pathname: '/call/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User', isInitiator: 'true' } });
         } catch { showAlert('Error', 'Failed to start call'); }
     };
 

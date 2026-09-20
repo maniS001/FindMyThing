@@ -6,7 +6,7 @@ import { MessageCircle } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_URL } from '../../constants/api';
-import Header from '../../components/Header';
+
 
 interface Conversation {
     id: string;
@@ -43,7 +43,7 @@ export default function ChatInbox() {
         return (
             <TouchableOpacity
                 style={[styles.row, { borderBottomColor: colors.border }]}
-                onPress={() => router.push({
+                onPress={() => (router as any).push({
                     pathname: '/chat/[conversationId]',
                     params: { conversationId: item.id, otherName: other.name }
                 })}
@@ -71,7 +71,7 @@ export default function ChatInbox() {
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-            <Header title="Messages" />
+            <View style={[styles.headerBar, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}><Text style={[styles.headerTitle, { color: colors.text }]}>Messages</Text></View>
             {loading ? (
                 <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
             ) : (
@@ -96,6 +96,8 @@ export default function ChatInbox() {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
+    headerBar: { padding: 20, borderBottomWidth: 1 },
+    headerTitle: { fontSize: 22, fontWeight: '800' },
     center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
     row: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, gap: 14 },
     avatar: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },

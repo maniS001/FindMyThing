@@ -25,7 +25,7 @@ export default function IncomingCallModal() {
         Vibration.cancel();
         const { conversationId, senderName } = incoming;
         setIncoming(null);
-        router.push({
+        (router as any).push({
             pathname: '/call/[conversationId]',
             params: { conversationId: conversationId!, otherName: senderName || 'Unknown', isInitiator: 'false' }
         });
