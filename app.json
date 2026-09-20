@@ -73,7 +73,6 @@
           "locationAlwaysAndWhenInUsePermission": "FindMate needs your location to show nearby lost & found items."
         }
       ],
-      "react-native-maps",
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "@react-native-google-signin/google-signin"
