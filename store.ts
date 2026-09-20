@@ -17,7 +17,7 @@ export interface Item {
     date: string;
     description: string;
     questions: { question: string; answer: string; }[];
-    contactInfo: string;
+    contactInfo?: string;
     imageUri?: string; // Main image for backward compatibility/preview
     imageUris?: string[]; // All images
     userId?: string;
@@ -35,7 +35,7 @@ export interface Complaint {
     location: string;
     date: string;
     description: string;
-    contactInfo: string;
+    contactInfo?: string;
     imageUris?: string[];
     status: 'OPEN' | 'CLOSED' | 'RESOLVED' | 'NOTIFIED';
     createdAt: string;
