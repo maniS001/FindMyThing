@@ -5,6 +5,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View, Tou
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
+import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
@@ -41,10 +42,11 @@ export default function FileComplaint() {
         category: '',
         location: '',
         description: '',
-        contactInfo: '',
-        imageUris: [] as string[],
+                imageUris: [] as string[],
     });
     const [date, setDate] = useState(new Date());
+    const [pickerVisible, setPickerVisible] = useState(false);
+    const [locationCoords, setLocationCoords] = useState<{lat: number, lon: number} | null>(null);
 
     useEffect(() => {
         if (token) {
@@ -86,7 +88,7 @@ export default function FileComplaint() {
     };
 
     const handleSubmit = async () => {
-        if (!form.name || !form.category || !form.location || !form.contactInfo) {
+        if (!form.name || !form.category || !form.location ) {
             showAlert('Missing Information', 'Please fill in all required fields.');
             return;
         }
@@ -136,19 +138,7 @@ export default function FileComplaint() {
         setLoading(true);
         try {
             let loc = null;
-            if (notificationType === 'RADIUS') {
-                try {
-                    const { status } = await Location.requestForegroundPermissionsAsync();
-                    if (status === 'granted') {
-                        loc = await Location.getLastKnownPositionAsync({});
-                        if (!loc) {
-                            loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                        }
-                    }
-                } catch (e) {
-                    console.warn("Location fetch failed or timed out:", e);
-                }
-            }
+            
 
             const { convertImagesToBase64 } = await import('../../utils/imageUtils');
             const base64Images = form.imageUris.length > 0
@@ -161,15 +151,14 @@ export default function FileComplaint() {
                 location: form.location,
                 date: date.toISOString().split('T')[0],
                 description: form.description,
-                contactInfo: form.contactInfo,
-                imageUris: base64Images,
+                                imageUris: base64Images,
                 userId: user?.id,
                 cashPrize: cashPrize.trim() || undefined,
                 notifyRadius: notificationType === 'RADIUS' ? Math.min(Math.max(parseInt(notifyRadius) || 1, 1), 10) : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? selectedCommunity?.id : undefined,
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? selectedOrg?.id : undefined,
-                latitude: loc?.coords.latitude,
-                longitude: loc?.coords.longitude,
+                latitude: locationCoords?.lat,
+                longitude: locationCoords?.lon,
             });
 
             router.push({ pathname: '/success', params: { type: 'complaint' } });
@@ -236,14 +225,6 @@ export default function FileComplaint() {
                             onChangeText={(text) => setForm({ ...form, description: text })}
                             multiline
                             numberOfLines={5}
-                        />
-
-                        <Input
-                            label="Your Contact Information *"
-                            placeholder="Phone Number"
-                            value={form.contactInfo}
-                            onChangeText={(text) => setForm({ ...form, contactInfo: text })}
-                            keyboardType="phone-pad"
                         />
 
                         <CustomImagePicker
@@ -325,7 +306,7 @@ export default function FileComplaint() {
                             {notificationType === 'RADIUS' && (
                                 <View style={{ marginTop: 8 }}>
                                     <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
-                                        Notify people within this radius of your current GPS location:
+                                        Notify people within this radius of the selected location:
                                     </Text>
                                     <View style={styles.radiusRow}>
                                         {['1', '2', '5', '10'].map(r => (

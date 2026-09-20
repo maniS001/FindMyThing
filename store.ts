@@ -9,6 +9,11 @@ export interface Item {
     name: string;
     category: string;
     location: string;
+    latitude?: number;
+    longitude?: number;
+    targetCommunityId?: string;
+    targetOrganizationId?: string;
+    notifyRadius?: number;
     date: string;
     description: string;
     questions: { question: string; answer: string; }[];
@@ -16,7 +21,7 @@ export interface Item {
     imageUri?: string; // Main image for backward compatibility/preview
     imageUris?: string[]; // All images
     userId?: string;
-    status?: 'OPEN' | 'CLAIMED' | 'RESOLVED' | 'RECOVERED' | 'NOTIFIED';
+    status?: 'OPEN' | 'CLAIMED' | 'RESOLVED' | 'RECOVERED' | 'NOTIFIED' | 'REOPENED';
     claimedByUserId?: string;
     recoveredAt?: string;
     feedbackRating?: number;
@@ -247,11 +252,16 @@ export const addComplaint = async (complaint: Omit<Complaint, 'id' | 'createdAt'
     }
 };
 
-export const getComplaints = async (): Promise<Complaint[]> => {
+export const getComplaints = async (lat?: number, lng?: number, radius?: number): Promise<Complaint[]> => {
     try {
         const token = await AsyncStorage.getItem('token');
         const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-        const response = await fetch(`${API_URL}/complaints`, { headers });
+                const params = new URLSearchParams();
+        if (lat) params.append('lat', lat.toString());
+        if (lng) params.append('lng', lng.toString());
+        if (radius) params.append('radius', radius.toString());
+        const qs = params.toString() ? `?${params.toString()}` : '';
+        const response = await fetch(`${API_URL}/complaints${qs}`, { headers });
         if (!response.ok) throw new Error('Failed to fetch complaints');
         return await response.json();
     } catch (error) {
@@ -260,12 +270,15 @@ export const getComplaints = async (): Promise<Complaint[]> => {
     }
 };
 
-export const searchComplaints = async (query: string, communityId?: string, orgId?: string): Promise<Complaint[]> => {
+export const searchComplaints = async (query: string, communityId?: string, orgId?: string, lat?: number, lng?: number, radius?: number): Promise<Complaint[]> => {
     try {
         const params = new URLSearchParams();
         if (query) params.append('query', query);
         if (communityId) params.append('communityId', communityId);
         if (orgId) params.append('orgId', orgId);
+        if (lat) params.append('lat', lat.toString());
+        if (lng) params.append('lng', lng.toString());
+        if (radius) params.append('radius', radius.toString());
         const token = await AsyncStorage.getItem('token');
         const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
         const response = await fetch(`${API_URL}/complaints?${params.toString()}`, { headers });

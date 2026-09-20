@@ -29,6 +29,13 @@ model User {
   orgAdmins       OrganizationAdmin[]
   ownedCommunities Community[] @relation("CommunityCreator")
   memberships     CommunityMember[]
+
+  // Chat & Call relations
+  sentConversations     Conversation[] @relation("ConversationInitiator")
+  receivedConversations Conversation[] @relation("ConversationRecipient")
+  sentMessages          Message[]
+  initiatedCalls        CallRequest[]  @relation("CallInitiator")
+  receivedCalls         CallRequest[]  @relation("CallRecipient")
 }
 
 model Item {
@@ -38,7 +45,7 @@ model Item {
   location    String
   date        String
   description String
-  contactInfo String
+  contactInfo String?    // Made optional – phone no longer required
   imageUris   String[]
   questions   Question[]
   status          String     @default("OPEN") // Added status
@@ -76,7 +83,7 @@ model Complaint {
   location    String
   date        String
   description String
-  contactInfo String
+  contactInfo String?  // Made optional – phone no longer required
   imageUris   String
   status      String   @default("OPEN")
   closureReason String? // Added
@@ -98,6 +105,7 @@ model Complaint {
   
   userId      String?
   user        User?      @relation(fields: [userId], references: [id])
+  conversations Conversation[]
 }
 
 model Notification {
@@ -111,6 +119,53 @@ model Notification {
   
   userId    String
   user      User     @relation(fields: [userId], references: [id])
+}
+
+// ===== In-App Private Communication =====
+
+model Conversation {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  initiatorId String
+  initiator   User   @relation("ConversationInitiator", fields: [initiatorId], references: [id])
+  recipientId String
+  recipient   User   @relation("ConversationRecipient", fields: [recipientId], references: [id])
+
+  complaintId   String?
+  complaint     Complaint? @relation(fields: [complaintId], references: [id])
+
+  messages    Message[]
+  callRequests CallRequest[]
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  content        String
+  createdAt      DateTime     @default(now())
+  read           Boolean      @default(false)
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id])
+}
+
+model CallRequest {
+  id             String       @id @default(uuid())
+  status         String       @default("PENDING") // PENDING, ACCEPTED, REJECTED, ENDED
+  createdAt      DateTime     @default(now())
+  endedAt        DateTime?
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  initiatorId    String
+  initiator      User         @relation("CallInitiator", fields: [initiatorId], references: [id])
+  recipientId    String
+  recipient      User         @relation("CallRecipient", fields: [recipientId], references: [id])
 }
 
 model Organization {

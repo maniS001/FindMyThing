@@ -3,7 +3,7 @@ import { StyleSheet, Text, TextInput, TextInputProps, View } from 'react-native'
 import { useTheme } from '../contexts/ThemeContext';
 
 interface InputProps extends TextInputProps {
-    label: string;
+    label?: string;
     error?: string;
 }
 
@@ -13,7 +13,7 @@ export default function Input({ label, error, style, ...props }: InputProps) {
 
     return (
         <View style={styles.container}>
-            <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
+            {label && <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>}
             <TextInput
                 style={[
                     styles.input,

@@ -24,6 +24,7 @@ export default function VerifyNotificationScreen() {
     const [captchaError, setCaptchaError] = useState('');
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [isPaid, setIsPaid] = useState(false);
+    const [isOtpVerified, setIsOtpVerified] = useState(!CONFIG.SMS_OTP_ENABLED);
 
     const captchaRef = useRef<CaptchaRef>(null);
 

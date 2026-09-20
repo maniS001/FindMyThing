@@ -31,8 +31,11 @@ export default function NotificationsScreen() {
     const [selectedComplaintId, setSelectedComplaintId] = useState<string | null>(null);
 
     useEffect(() => {
-        fetchNotifications();
-    }, []);
+        if (token) {
+            setLoading(true);
+            fetchNotifications();
+        }
+    }, [token]);
 
     const fetchNotifications = async () => {
         try {

@@ -5,6 +5,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
+import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
@@ -28,10 +29,11 @@ export default function EditFoundItem() {
         location: '',
         description: '',
         questions: [] as { question: string; answer: string; }[],
-        contactInfo: '',
-        imageUris: [] as string[],
+                imageUris: [] as string[],
     });
     const [date, setDate] = useState(new Date());
+    const [pickerVisible, setPickerVisible] = useState(false);
+    const [locationCoords, setLocationCoords] = useState<{lat: number, lon: number} | null>(null);
     const [itemStatus, setItemStatus] = useState<string>('OPEN');
     
     const [comms, setComms] = useState<any[]>([]);
@@ -76,8 +78,7 @@ export default function EditFoundItem() {
                         questions: (item.questions && Array.isArray(item.questions) && item.questions.length > 0)
                             ? item.questions.map((q: any) => ({ question: q.question || '', answer: q.answer || '' }))
                             : [{ question: '', answer: '' }],
-                        contactInfo: item.contactInfo,
-                        imageUris: item.imageUris || (item.imageUri ? [item.imageUri] : []),
+                                                imageUris: item.imageUris || (item.imageUri ? [item.imageUri] : []),
                     });
                     setDate(new Date(item.date));
                     setItemStatus(item.status || 'OPEN');
@@ -173,7 +174,7 @@ export default function EditFoundItem() {
     const handleSubmit = async () => {
         const areQuestionsValid = form.questions.every(q => q.question.trim() && q.answer.trim());
 
-        if (!form.name || !form.location || !areQuestionsValid || !form.contactInfo) {
+        if (!form.name || !form.location || !areQuestionsValid ) {
             showAlert('Missing Information', 'Please fill in all required fields, including all security questions and answers.');
             return;
         }
@@ -251,8 +252,7 @@ export default function EditFoundItem() {
                     location: form.location,
                     date: date.toISOString().split('T')[0],
                     description: form.description,
-                    contactInfo: form.contactInfo,
-                    imageUris: finalImages,
+                                        imageUris: finalImages,
                     questions: form.questions,
                     notifyRadius: notificationType === 'RADIUS' ? parseInt(notifyRadius) || 1 : undefined,
                     targetCommunityId: notificationType === 'COMMUNITY' ? targetCommunityId || undefined : undefined,
@@ -414,7 +414,7 @@ export default function EditFoundItem() {
                             {notificationType === 'RADIUS' && (
                                 <View style={{ marginTop: 8 }}>
                                     <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
-                                        Notify people within this radius of your current GPS location:
+                                        Notify people within this radius of the selected location:
                                     </Text>
                                     <Input
                                         placeholder="Radius in km (e.g. 5)"
@@ -501,12 +501,7 @@ export default function EditFoundItem() {
                             style={{ marginBottom: 24 }}
                         />
 
-                        <Input
-                            label="Contact Info"
-                            value={form.contactInfo}
-                            onChangeText={(text) => setForm({ ...form, contactInfo: text })}
-                            keyboardType="phone-pad"
-                        />
+                        
 
                         <View style={styles.actions}>
                             <Button

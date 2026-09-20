@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Calendar, MapPin, Phone } from 'lucide-react-native';
+import { Calendar, MapPin, Phone, MessageCircle } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View, TouchableOpacity, Linking } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
@@ -82,6 +82,33 @@ export default function ComplaintDetail() {
         } finally {
             setNotifyLoading(false);
         }
+    };
+
+
+    const handleMessage = async () => {
+        if (!complaint.userId || !token) return;
+        try {
+            const res = await fetch(`${API_URL}/conversations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ recipientId: complaint.userId, complaintId: complaint.id })
+            });
+            const conv = await res.json();
+            router.push({ pathname: '/chat/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User' } });
+        } catch { showAlert('Error', 'Failed to open chat'); }
+    };
+
+    const handleCall = async () => {
+        if (!complaint.userId || !token) return;
+        try {
+            const res = await fetch(`${API_URL}/conversations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ recipientId: complaint.userId, complaintId: complaint.id })
+            });
+            const conv = await res.json();
+            router.push({ pathname: '/call/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User', isInitiator: 'true' } });
+        } catch { showAlert('Error', 'Failed to start call'); }
     };
 
     if (loading) {
@@ -188,26 +215,25 @@ export default function ComplaintDetail() {
                             </View>
                         </View>
 
-                        <View style={styles.infoRow}>
-                            <Phone size={20} color={colors.primary} />
-                            <View style={[styles.infoContent, { flex: 1 }]}>
-                                <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Contact</Text>
-                                <Text style={[styles.infoValue, { color: colors.text }]}>
-                                    {/* Show phone directly when payment is disabled OR when resolved */}
-                                    {isResolved || !CONFIG.ENABLE_PAYMENT
-                                        ? complaint.contactInfo
-                                        : 'Start Notify to Connect'}
-                                </Text>
-                            </View>
-                            {(isResolved || !CONFIG.ENABLE_PAYMENT) && complaint.contactInfo && (
-                                <TouchableOpacity 
-                                    style={{ backgroundColor: colors.primary, padding: 8, borderRadius: 50, marginLeft: 12 }}
-                                    onPress={() => Linking.openURL(`tel:${complaint.contactInfo}`)}
+                        {/* In-app Message & Call -- no phone numbers exposed */}
+                        {complaint.userId && complaint.userId !== user?.id && (
+                            <View style={styles.actionRow}>
+                                <TouchableOpacity
+                                    style={[styles.actionBtn, { backgroundColor: colors.primary }]}
+                                    onPress={handleMessage}
                                 >
-                                    <Phone size={18} color="white" />
+                                    <MessageCircle size={20} color="#FFF" />
+                                    <Text style={styles.actionBtnText}>Message</Text>
                                 </TouchableOpacity>
-                            )}
-                        </View>
+                                <TouchableOpacity
+                                    style={[styles.actionBtn, { backgroundColor: '#10B981' }]}
+                                    onPress={handleCall}
+                                >
+                                    <Phone size={20} color="#FFF" />
+                                    <Text style={styles.actionBtnText}>Call</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
                     </View>
 
                     {complaint.description && (
@@ -347,6 +373,26 @@ const styles = StyleSheet.create({
     description: {
         fontSize: 16,
         lineHeight: 24,
+    },
+    actionRow: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 8,
+        marginBottom: 8,
+    },
+    actionBtn: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 14,
+        borderRadius: 14,
+    },
+    actionBtnText: {
+        color: '#FFF',
+        fontWeight: '700',
+        fontSize: 15,
     },
     actions: {
         flexDirection: 'row',

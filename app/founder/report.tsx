@@ -5,6 +5,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, Touchable
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
+import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
@@ -62,10 +63,11 @@ export default function ReportFoundItem() {
         location: '',
         description: '',
         questions: [{ question: '', answer: '' }],
-        contactInfo: '',
-        imageUris: [] as string[],
+                imageUris: [] as string[],
     });
     const [date, setDate] = useState(new Date());
+    const [pickerVisible, setPickerVisible] = useState(false);
+    const [locationCoords, setLocationCoords] = useState<{lat: number, lon: number} | null>(null);
 
     const handleAddQuestion = () => {
         setForm({
@@ -137,7 +139,7 @@ export default function ReportFoundItem() {
     const handleSubmit = async () => {
         const areQuestionsValid = form.questions.every(q => q.question.trim() && q.answer.trim());
 
-        if (!form.name || !form.location || !areQuestionsValid || !form.contactInfo) {
+        if (!form.name || !form.location || !areQuestionsValid ) {
             showAlert('Missing Information', 'Please fill in all required fields, including all security questions and answers.');
             return;
         }
@@ -196,19 +198,7 @@ export default function ReportFoundItem() {
         setSubmitFinalLoading(true);
         try {
             let loc = null;
-            if (notificationType === 'RADIUS') {
-                try {
-                    const { status } = await Location.requestForegroundPermissionsAsync();
-                    if (status === 'granted') {
-                        loc = await Location.getLastKnownPositionAsync({});
-                        if (!loc) {
-                            loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                        }
-                    }
-                } catch (e) {
-                    console.warn("Location fetch failed or timed out:", e);
-                }
-            }
+            
 
             const { convertImagesToBase64 } = await import('../../utils/imageUtils');
             const base64Images = form.imageUris.length > 0
@@ -221,15 +211,14 @@ export default function ReportFoundItem() {
                 location: form.location,
                 date: date.toISOString().split('T')[0],
                 description: form.description,
-                contactInfo: form.contactInfo,
-                imageUris: base64Images,
+                                imageUris: base64Images,
                 questions: form.questions,
                 userId: user?.id,
                 notifyRadius: notificationType === 'RADIUS' ? parseInt(notifyRadius) || 1 : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? targetCommunityId || undefined : undefined,
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? targetOrganizationId || undefined : undefined,
-                latitude: loc ? loc.coords.latitude : undefined,
-                longitude: loc ? loc.coords.longitude : undefined,
+                latitude: locationCoords?.lat,
+                longitude: locationCoords?.lon,
                 skipNotifications,
             });
             setMatchModalVisible(false);
@@ -366,14 +355,6 @@ export default function ReportFoundItem() {
                             style={{ marginBottom: 24 }}
                         />
 
-                        <Input
-                            label="Your Contact Info (Hidden)"
-                            placeholder="Phone Number (shared only after verification)"
-                            value={form.contactInfo}
-                            onChangeText={(text) => setForm({ ...form, contactInfo: text })}
-                            keyboardType="phone-pad"
-                        />
-
                         <View style={{ marginBottom: 24, padding: 16, backgroundColor: colors.surface, borderRadius: 16, borderWidth: 1, borderColor: colors.border }}>
                             <View style={styles.sectionHeader}>
                                 <Text style={{ fontSize: 18 }}>📢</Text>
@@ -420,7 +401,7 @@ export default function ReportFoundItem() {
                             {notificationType === 'RADIUS' && (
                                 <View style={{ marginTop: 8 }}>
                                     <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
-                                        Notify people within this radius of your current GPS location:
+                                        Notify people within this radius of the selected location:
                                     </Text>
                                     <Input
                                         placeholder="Radius in km (e.g. 5)"

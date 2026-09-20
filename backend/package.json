@@ -27,6 +27,7 @@
     "@prisma/client": "^5.22.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/ws": "^8.18.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
@@ -36,6 +37,7 @@
     "jsonwebtoken": "^9.0.2",
     "prisma": "^5.22.0",
     "svg-captcha": "^1.4.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "ws": "^8.21.3"
   }
 }

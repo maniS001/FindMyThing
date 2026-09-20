@@ -225,7 +225,7 @@ export default function Login() {
                                             style={[styles.phoneInput, { color: colors.text }]}
                                             value={phone}
                                             onChangeText={(v) => { setPhone(v); setError(''); }}
-                                            placeholder="98765 43210"
+                                            placeholder="Phone number"
                                             placeholderTextColor={colors.textSecondary}
                                             keyboardType="phone-pad"
                                             onFocus={() => setIsPhoneFocused(true)}

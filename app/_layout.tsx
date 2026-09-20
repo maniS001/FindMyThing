@@ -13,6 +13,8 @@ import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
 import { API_URL } from '../constants/api';
 import { registerForPushNotificationsAsync } from '../utils/pushNotifications';
 import * as Location from 'expo-location';
+import chatService from '../services/chatService';
+import IncomingCallModal from '../components/IncomingCallModal';
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -42,10 +44,20 @@ function RootLayoutContent() {
       router.push(url);
     }
   }, [lastNotificationResponse]);
-  const notificationListener = useRef<Notifications.Subscription>();
-  const responseListener = useRef<Notifications.Subscription>();
+  const notificationListener = useRef<Notifications.Subscription | null>(null);
+  const responseListener = useRef<Notifications.Subscription | null>(null);
 
   const { user, token: authToken } = useAuth();
+
+  // Connect/disconnect WebSocket when auth changes
+  useEffect(() => {
+    if (authToken) {
+      chatService.connect();
+    } else {
+      chatService.disconnect();
+    }
+    return () => {};
+  }, [authToken]);
 
   useEffect(() => {
     registerForPushNotificationsAsync().then(async pushToken => {
@@ -145,7 +157,11 @@ function RootLayoutContent() {
               <Stack.Screen name="settings" options={{ headerShown: false }} />
               <Stack.Screen name="about" options={{ headerShown: false }} />
               <Stack.Screen name="notifications" options={{ headerShown: false }} />
+              <Stack.Screen name="chat/index" options={{ headerShown: false }} />
+              <Stack.Screen name="chat/[conversationId]" options={{ headerShown: false }} />
+              <Stack.Screen name="call/[conversationId]" options={{ headerShown: false }} />
             </Stack>
+            <IncomingCallModal />
           </>
         </View>
       </SafeAreaProvider>

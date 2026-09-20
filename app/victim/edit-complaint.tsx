@@ -4,6 +4,7 @@ import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, Vi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
+import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
@@ -58,10 +59,11 @@ export default function EditComplaint() {
         category: '',
         location: '',
         description: '',
-        contactInfo: '',
-        imageUris: [] as string[],
+                imageUris: [] as string[],
     });
     const [date, setDate] = useState(new Date());
+    const [pickerVisible, setPickerVisible] = useState(false);
+    const [locationCoords, setLocationCoords] = useState<{lat: number, lon: number} | null>(null);
 
     const [comms, setComms] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
@@ -107,8 +109,7 @@ export default function EditComplaint() {
                     category: data.category,
                     location: data.location,
                     description: data.description,
-                    contactInfo: data.contactInfo,
-                    imageUris: Array.isArray(data.imageUris)
+                                        imageUris: Array.isArray(data.imageUris)
                         ? data.imageUris
                         : (typeof data.imageUris === 'string'
                             ? JSON.parse(data.imageUris)
@@ -139,7 +140,7 @@ export default function EditComplaint() {
     };
 
     const handleSubmit = async () => {
-        if (!form.name || !form.category || !form.location || !form.contactInfo) {
+        if (!form.name || !form.category || !form.location ) {
             showAlert('Missing Information', 'Please fill in all required fields.');
             return;
         }
@@ -195,8 +196,7 @@ export default function EditComplaint() {
                 location: form.location,
                 date: date.toISOString().split('T')[0],
                 description: form.description,
-                contactInfo: form.contactInfo,
-                imageUris: base64Images,
+                                imageUris: base64Images,
                 notifyRadius: notificationType === 'RADIUS' ? parseInt(notifyRadius) || 1 : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? targetCommunityId || undefined : undefined,
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? targetOrganizationId || undefined : undefined,
@@ -286,14 +286,6 @@ export default function EditComplaint() {
                             numberOfLines={5}
                         />
 
-                        <Input
-                            label="Your Contact Information *"
-                            placeholder="Phone Number"
-                            value={form.contactInfo}
-                            onChangeText={(text) => setForm({ ...form, contactInfo: text })}
-                            keyboardType="phone-pad"
-                        />
-
                         <CustomImagePicker
                             label="Upload Photos (Optional)"
                             onImagesSelected={(uris) => setForm({ ...form, imageUris: uris })}
@@ -305,8 +297,8 @@ export default function EditComplaint() {
                             <View style={styles.sectionHeader}>
                                 <Text style={{ fontSize: 18 }}>📢</Text>
                                 <View style={{ marginLeft: 10, flex: 1 }}>
-                                    <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 0 }]}>Who to Notify</Text>
-                                    <Text style={[styles.sectionDesc, { color: colors.textSecondary, marginBottom: 0 }]}>
+                                    <Text style={[styles.heading, { color: colors.text, marginBottom: 0 }]}>Who to Notify</Text>
+                                    <Text style={[styles.heading, { color: colors.textSecondary, marginBottom: 0 }]}>
                                         Choose who gets an alert about this item
                                     </Text>
                                 </View>
@@ -347,7 +339,7 @@ export default function EditComplaint() {
                             {notificationType === 'RADIUS' && (
                                 <View style={{ marginTop: 8 }}>
                                     <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 8 }}>
-                                        Notify people within this radius of your current GPS location:
+                                        Notify people within this radius of the selected location:
                                     </Text>
                                     <Input
                                         placeholder="Radius in km (e.g. 5)"

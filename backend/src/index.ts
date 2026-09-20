@@ -1,10 +1,12 @@
-// Backend v2.2 - Math CAPTCHA, Push Notifications, Payment Gateway, AI Validation
+// Backend v2.3 - WebRTC Signaling, In-App Chat, Push Notifications, AI Validation
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
+import * as http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import svgCaptcha from 'svg-captcha';
@@ -17,9 +19,129 @@ import { findMatchingComplaints } from './matching';
 dotenv.config();
 
 const app = express();
+const httpServer = http.createServer(app);
 const prisma = new PrismaClient();
 const port = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || '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';
+
+// ====== WebSocket Signaling Server ======
+const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+// Map userId -> WebSocket client
+const wsClients = new Map<string, WebSocket>();
+
+const wsBroadcastToUser = (userId: string, payload: object) => {
+    const client = wsClients.get(userId);
+    if (client && client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify(payload));
+    }
+};
+
+wss.on('connection', (ws) => {
+    let authenticatedUserId: string | null = null;
+
+    ws.on('message', async (rawData) => {
+        try {
+            const msg = JSON.parse(rawData.toString());
+
+            // AUTH: client sends JWT token to identify itself
+            if (msg.type === 'AUTH') {
+                try {
+                    const decoded: any = jwt.verify(msg.token, JWT_SECRET);
+                    authenticatedUserId = decoded.id;
+                    wsClients.set(authenticatedUserId!, ws);
+                    ws.send(JSON.stringify({ type: 'AUTH_OK' }));
+                    console.log(`[WS] User ${authenticatedUserId} connected`);
+                } catch {
+                    ws.send(JSON.stringify({ type: 'ERROR', error: 'Invalid token' }));
+                }
+                return;
+            }
+
+            if (!authenticatedUserId) {
+                ws.send(JSON.stringify({ type: 'ERROR', error: 'Not authenticated' }));
+                return;
+            }
+
+            const { type, conversationId, content, sdp, candidate } = msg;
+
+            // Verify sender belongs to this conversation
+            const conversation = await prisma.conversation.findFirst({
+                where: {
+                    id: conversationId,
+                    OR: [{ initiatorId: authenticatedUserId }, { recipientId: authenticatedUserId }]
+                }
+            });
+            if (!conversation) return;
+
+            const otherUserId = conversation.initiatorId === authenticatedUserId
+                ? conversation.recipientId
+                : conversation.initiatorId;
+
+            const senderUser = await prisma.user.findUnique({ where: { id: authenticatedUserId } });
+
+            if (type === 'CHAT_MESSAGE') {
+                // Persist message to DB
+                const message = await prisma.message.create({
+                    data: { content, conversationId, senderId: authenticatedUserId! }
+                });
+                // Update conversation timestamp
+                await prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
+
+                const payload = { type: 'CHAT_MESSAGE', conversationId, messageId: message.id, content, senderId: authenticatedUserId, senderName: senderUser?.name, createdAt: message.createdAt };
+                // Send to both sender and receiver
+                ws.send(JSON.stringify(payload));
+                wsBroadcastToUser(otherUserId, payload);
+
+                // Push notification if recipient is offline
+                if (!wsClients.has(otherUserId) || wsClients.get(otherUserId)!.readyState !== WebSocket.OPEN) {
+                    const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
+                    if (recipient?.pushToken) {
+                        await sendPushNotification(recipient.pushToken, `New message from ${senderUser?.name}`, content, { url: `/chat/${conversationId}` });
+                    }
+                }
+
+            } else if (type === 'CALL_OFFER') {
+                // Create a call record
+                const callReq = await prisma.callRequest.create({
+                    data: { conversationId, initiatorId: authenticatedUserId!, recipientId: otherUserId, status: 'PENDING' }
+                });
+                wsBroadcastToUser(otherUserId, { type: 'CALL_INCOMING', conversationId, callRequestId: callReq.id, sdp, senderName: senderUser?.name, senderId: authenticatedUserId });
+
+                // Push notification for offline user
+                const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
+                if (recipient?.pushToken) {
+                    await sendPushNotification(recipient.pushToken, `Incoming call from ${senderUser?.name}`, 'Tap to answer', { url: `/call/${conversationId}` });
+                }
+
+            } else if (type === 'CALL_ANSWER') {
+                await prisma.callRequest.updateMany({ where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' }, data: { status: 'ACCEPTED' } });
+                wsBroadcastToUser(otherUserId, { type: 'CALL_ANSWER', conversationId, sdp, senderId: authenticatedUserId });
+
+            } else if (type === 'ICE_CANDIDATE') {
+                wsBroadcastToUser(otherUserId, { type: 'ICE_CANDIDATE', conversationId, candidate, senderId: authenticatedUserId });
+
+            } else if (type === 'CALL_ENDED') {
+                await prisma.callRequest.updateMany({ where: { conversationId, status: { in: ['PENDING', 'ACCEPTED'] } }, data: { status: 'ENDED', endedAt: new Date() } });
+                wsBroadcastToUser(otherUserId, { type: 'CALL_ENDED', conversationId });
+
+            } else if (type === 'CALL_REJECTED') {
+                await prisma.callRequest.updateMany({ where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' }, data: { status: 'REJECTED' } });
+                wsBroadcastToUser(otherUserId, { type: 'CALL_REJECTED', conversationId });
+            }
+
+        } catch (err) {
+            console.error('[WS] Error:', err);
+        }
+    });
+
+    ws.on('close', () => {
+        if (authenticatedUserId) {
+            wsClients.delete(authenticatedUserId);
+            console.log(`[WS] User ${authenticatedUserId} disconnected`);
+        }
+    });
+});
 
 // Initialize Firebase Admin
 try {
@@ -1817,8 +1939,99 @@ app.get('/api/users/me/pending-requests', authenticateToken, async (req: any, re
     }
 });
 
+// ====== Chat REST API ======
+
+// Create or get existing conversation
+app.post('/api/conversations', authenticateToken, async (req: any, res: any) => {
+    try {
+        const { recipientId, complaintId } = req.body;
+        const initiatorId = req.user.id;
+
+        if (initiatorId === recipientId) return res.status(400).json({ error: 'Cannot chat with yourself' });
+
+        // Find existing conversation between these two users about this complaint
+        let conversation = await prisma.conversation.findFirst({
+            where: {
+                complaintId: complaintId || undefined,
+                OR: [
+                    { initiatorId, recipientId },
+                    { initiatorId: recipientId, recipientId: initiatorId }
+                ]
+            },
+            include: { initiator: { select: { id: true, name: true } }, recipient: { select: { id: true, name: true } }, messages: { orderBy: { createdAt: 'asc' }, take: 1 } }
+        });
+
+        if (!conversation) {
+            conversation = await prisma.conversation.create({
+                data: { initiatorId, recipientId, complaintId: complaintId || null },
+                include: { initiator: { select: { id: true, name: true } }, recipient: { select: { id: true, name: true } }, messages: { orderBy: { createdAt: 'asc' }, take: 1 } }
+            });
+        }
+
+        res.json(conversation);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Get all conversations for me
+app.get('/api/conversations', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        const conversations = await prisma.conversation.findMany({
+            where: { OR: [{ initiatorId: userId }, { recipientId: userId }] },
+            include: {
+                initiator: { select: { id: true, name: true } },
+                recipient: { select: { id: true, name: true } },
+                messages: { orderBy: { createdAt: 'desc' }, take: 1 },
+                complaint: { select: { id: true, name: true } }
+            },
+            orderBy: { updatedAt: 'desc' }
+        });
+        res.json(conversations);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Get messages in a conversation
+app.get('/api/conversations/:id/messages', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+        // Verify membership
+        const conv = await prisma.conversation.findFirst({ where: { id, OR: [{ initiatorId: userId }, { recipientId: userId }] } });
+        if (!conv) return res.status(403).json({ error: 'Not in this conversation' });
+
+        // Mark all as read
+        await prisma.message.updateMany({ where: { conversationId: id, senderId: { not: userId }, read: false }, data: { read: true } });
+
+        const messages = await prisma.message.findMany({
+            where: { conversationId: id },
+            orderBy: { createdAt: 'asc' },
+            include: { sender: { select: { id: true, name: true } } }
+        });
+        res.json(messages);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// Send message via REST (fallback for when WS is unavailable)
+app.post('/api/conversations/:id/messages', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        const { id } = req.params;
+        const { content } = req.body;
+        const conv = await prisma.conversation.findFirst({ where: { id, OR: [{ initiatorId: userId }, { recipientId: userId }] } });
+        if (!conv) return res.status(403).json({ error: 'Not in this conversation' });
+
+        const message = await prisma.message.create({
+            data: { content, conversationId: id, senderId: userId },
+            include: { sender: { select: { id: true, name: true } } }
+        });
+        await prisma.conversation.update({ where: { id }, data: { updatedAt: new Date() } });
+        res.json(message);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // Start server after all routes are registered
-app.listen(port, () => {
+httpServer.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
+    console.log(`WebSocket server running at ws://localhost:${port}/ws`);
 });
 

@@ -18,4 +18,6 @@ export const CONFIG = {
     SMS_OTP_ENABLED: APP_CONFIG.FEATURES.SMS_OTP_ENABLED,
     MERCHANT_VPA: 'merchant@upi', // Replace with real VPA in production
     MERCHANT_NAME: 'FindMate Services',
+    PAYMENT_MODE: 'UPI' as 'UPI' | 'SANDBOX',
+    PROCESSING_FEE: 10,
 } as const;

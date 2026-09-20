@@ -9,6 +9,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_URL } from '../../constants/api';
 import { Complaint, getComplaints, searchComplaints } from '../../store';
+import * as Location from 'expo-location';
 
 export default function ViewComplaints() {
     const router = useRouter();
@@ -83,10 +84,26 @@ export default function ViewComplaints() {
                 loadComplaints();
                 return;
             }
+            let lat, lng, radiusNum;
+            if (filterType === 'RADIUS' && filterRadius !== 'All') {
+                try {
+                    const { status } = await Location.requestForegroundPermissionsAsync();
+                    if (status === 'granted') {
+                        let loc = await Location.getLastKnownPositionAsync({});
+                        if (!loc) loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                        if (loc) {
+                            lat = loc.coords.latitude;
+                            lng = loc.coords.longitude;
+                            radiusNum = parseFloat(filterRadius);
+                        }
+                    }
+                } catch(e) {}
+            }
             const results = await searchComplaints(
                 searchQuery,
                 filterType === 'COMMUNITY' ? selectedCommunity?.id : undefined,
                 filterType === 'ORGANIZATION' ? selectedOrg?.id : undefined,
+                lat, lng, radiusNum
             );
             setComplaints(results);
         } finally {
@@ -259,13 +276,13 @@ export default function ViewComplaints() {
                                 <View style={{ marginTop: 8 }}>
                                     <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 6 }}>Radius around current location:</Text>
                                     <View style={styles.radiusRow}>
-                                        {['1', '2', '5', '10'].map(r => (
+                                        {['All', '1', '2', '5', '10'].map(r => (
                                             <TouchableOpacity
                                                 key={r}
                                                 style={[styles.radiusChip, { borderColor: filterRadius === r ? colors.primary : colors.border, backgroundColor: filterRadius === r ? colors.primary : 'transparent' }]}
                                                 onPress={() => setFilterRadius(r)}
                                             >
-                                                <Text style={{ color: filterRadius === r ? 'white' : colors.text, fontWeight: '600', fontSize: 13 }}>{r} km</Text>
+                                                <Text style={{ color: filterRadius === r ? 'white' : colors.text, fontWeight: '600', fontSize: 13 }}>{r === 'All' ? 'All' : r + ' km'}</Text>
                                             </TouchableOpacity>
                                         ))}
                                     </View>
