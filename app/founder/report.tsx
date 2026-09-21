@@ -271,11 +271,13 @@ export default function ReportFoundItem() {
                             onChange={(category) => setForm({ ...form, category })}
                         />
 
-                        <Input
-                            label="Location Found"
-                            placeholder="e.g. Central Park, near bench"
+                        <LocationPicker
+                            label="Location Found *"
                             value={form.location}
-                            onChangeText={(text) => setForm({ ...form, location: text })}
+                            onChange={(location, coords) => {
+                                setForm({ ...form, location });
+                                setLocationCoords(coords ? { lat: coords.latitude, lon: coords.longitude } : null);
+                            }}
                         />
 
                         <DatePicker

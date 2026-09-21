@@ -193,11 +193,13 @@ export default function FileComplaint() {
                             onChange={(category) => setForm({ ...form, category })}
                         />
 
-                        <Input
+                        <LocationPicker
                             label="Where did you lose it? *"
-                            placeholder="e.g. Central Park, Times Square"
                             value={form.location}
-                            onChangeText={(text) => setForm({ ...form, location: text })}
+                            onChange={(location, coords) => {
+                                setForm({ ...form, location });
+                                setLocationCoords(coords ? { lat: coords.latitude, lon: coords.longitude } : null);
+                            }}
                         />
 
                         <DatePicker

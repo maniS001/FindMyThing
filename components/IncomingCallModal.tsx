@@ -23,11 +23,16 @@ export default function IncomingCallModal() {
     const accept = useCallback(() => {
         if (!incoming) return;
         Vibration.cancel();
-        const { conversationId, senderName } = incoming;
+        const { conversationId, senderName, sdp } = incoming;
         setIncoming(null);
         (router as any).push({
             pathname: '/call/[conversationId]',
-            params: { conversationId: conversationId!, otherName: senderName || 'Unknown', isInitiator: 'false' }
+            params: {
+                conversationId: conversationId!,
+                otherName: senderName || 'Unknown',
+                isInitiator: 'false',
+                incomingSdp: sdp ? JSON.stringify(sdp) : ''
+            }
         });
     }, [incoming, router]);
 
