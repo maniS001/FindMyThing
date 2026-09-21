@@ -263,10 +263,10 @@ export default function CommunitiesScreen() {
     const handleSendInviteSMS = async () => {
         const isAvailable = await SMS.isAvailableAsync();
         if (isAvailable && missingUsers.length > 0) {
-            const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+            const link = `https://findmything.vercel.app/join/${selectedCommId}`;
             await SMS.sendSMSAsync(
                 missingUsers,
-                `Hey! Join my community on FindMate to stay updated. Download the app here: ${link}`
+                `Hey! Join my community on FindMyThing to stay updated. Download the app here: ${link}`
             );
             setMissingUsers([]);
             setMemberModalVisible(false);
@@ -277,16 +277,16 @@ export default function CommunitiesScreen() {
     };
 
     const handleCopyLink = async () => {
-        const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+        const link = `https://findmything.vercel.app/join/${selectedCommId}`;
         await Clipboard.setStringAsync(link);
         showAlert('Copied!', 'Community invite link copied to clipboard.');
     };
 
     const handleShareLink = async () => {
-        const link = `https://findmate.vercel.app/join/${selectedCommId}`;
+        const link = `https://findmything.vercel.app/join/${selectedCommId}`;
         try {
             await Share.share({
-                message: `Join my community on FindMate: ${link}`,
+                message: `Join my community on FindMyThing: ${link}`,
                 url: link,
                 title: 'Share Community Invite Link'
             });
@@ -544,7 +544,7 @@ export default function CommunitiesScreen() {
                             {missingUsers.length > 0 ? (
                                 <View style={{ paddingVertical: 20 }}>
                                     <Text style={{ color: colors.text, fontSize: 16, marginBottom: 12, fontWeight: 'bold' }}>
-                                        {missingUsers.length} people are not on FindMate!
+                                        {missingUsers.length} people are not on FindMyThing!
                                     </Text>
                                     <Text style={{ color: colors.textSecondary, marginBottom: 20, lineHeight: 22 }}>
                                         Send them an invite link so they can download the app and join the community automatically.

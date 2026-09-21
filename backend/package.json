@@ -1,7 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "description": "FindMate Backend API",
+  "description": "FindMyThing Backend API",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node src/index.ts",

@@ -87,7 +87,7 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
                                 </TouchableOpacity>
                             )}
                             <TouchableOpacity onPress={() => router.dismissAll()} activeOpacity={0.7}>
-                                <Text style={[styles.logo, { color: colors.headerText }]}>FindMate</Text>
+                                <Text style={[styles.logo, { color: colors.headerText }]}>FindMyThing</Text>
                             </TouchableOpacity>
                         </>
                     )}

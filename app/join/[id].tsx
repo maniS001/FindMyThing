@@ -88,7 +88,7 @@ export default function JoinCommunityScreen() {
                 You've been invited!
             </Text>
             <Text style={{ fontSize: 16, color: colors.textSecondary, textAlign: 'center', marginBottom: 32 }}>
-                You have been invited to join a FindMate community. Click below to accept the invitation.
+                You have been invited to join a FindMyThing community. Click below to accept the invitation.
             </Text>
             <TouchableOpacity onPress={handleJoin} style={[styles.btn, { backgroundColor: colors.primary }]}>
                 <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 16, textAlign: 'center' }}>

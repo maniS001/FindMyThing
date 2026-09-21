@@ -245,7 +245,7 @@ const getGeminiModel = (modelIndex = 0) => {
         generationConfig: {
             responseMimeType: "application/json",
         },
-        systemInstruction: `You are the dedicated AI Agent for FindMate, a modern Lost & Found application.
+        systemInstruction: `You are the dedicated AI Agent for FindMyThing, a modern Lost & Found application.
 Your primary goals are to:
 1. Ensure all lost and found item reports are logically consistent, genuine, and high quality.
 2. Strictly protect user privacy by blocking any attempts to share phone numbers, emails, or social media handles in public descriptions.
@@ -409,7 +409,7 @@ CRITICAL RULES — you will be rejected if you break any:
    Example for victim: "I lost my ${name} at ${location}..."
    Example for founder: "I found a ${name} at ${location}..."
 2. Write as the PERSON who ${action} the item — NOT as a support team or system.
-3. Do NOT use phrases like "reported", "please contact", "FindMate", "contact support".
+3. Do NOT use phrases like "reported", "please contact", "FindMyThing", "contact support".
 4. Do NOT include phone numbers, emails, or placeholder text.
 5. Do NOT invent details beyond what is provided.
 6. Keep it natural and personal, like a real person writing.
@@ -1352,7 +1352,7 @@ app.post('/api/complaints/:id/resolve', authenticateToken, async (req: any, res)
                 resolvedAt: new Date(),
                 feedbackRating: rating,
                 feedbackComment: comment,
-                closureReason: 'Item recovered via FindMate'
+                closureReason: 'Item recovered via FindMyThing'
             },
         });
 

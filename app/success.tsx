@@ -134,7 +134,7 @@ export default function Success() {
         }
 
         try {
-            await updateComplaintStatus(selectedComplaintId, 'RESOLVED', 'Item recovered via FindMate');
+            await updateComplaintStatus(selectedComplaintId, 'RESOLVED', 'Item recovered via FindMyThing');
             showAlert('Success', 'Item marked as recovered and complaint closed!', [
                 { text: 'OK', onPress: () => router.push('/') }
             ]);

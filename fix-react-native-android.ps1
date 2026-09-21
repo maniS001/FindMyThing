@@ -12,7 +12,7 @@ Write-Host "Deleting Gradle cache: $gradleCache"
 Remove-Item -Recurse -Force -Path $gradleCache -ErrorAction SilentlyContinue
 
 # 3. Go to project root
-$projectPath = "D:\MANI S\PROJECTS\FindMate"
+$projectPath = "D:\MANI S\PROJECTS\FindMyThing"
 Write-Host "Navigating to project: $projectPath"
 Set-Location $projectPath
 

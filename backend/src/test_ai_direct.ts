@@ -9,7 +9,7 @@ const getGeminiModel = () => {
         generationConfig: {
             responseMimeType: "application/json",
         },
-        systemInstruction: `You are the dedicated AI Agent for FindMate.`
+        systemInstruction: `You are the dedicated AI Agent for FindMyThing.`
     });
 };
 

@@ -10,7 +10,7 @@
       "client_info": {
         "mobilesdk_app_id": "1:1018607704367:android:458fd1820d5683b8b7a9da",
         "android_client_info": {
-          "package_name": "com.manikandan.findmate"
+          "package_name": "com.manikandan.findmything"
         }
       },
       "oauth_client": [
@@ -18,7 +18,7 @@
           "client_id": "1018607704367-fqajlrfhc82b4a80vn2nv6dqffko1n5p.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.manikandan.findmate",
+            "package_name": "com.manikandan.findmything",
             "certificate_hash": "883915aa0c349e7dfa805ad4e2500d74faa28869"
           }
         },
@@ -26,7 +26,7 @@
           "client_id": "1018607704367-i0cqp73k316t2a33spbpl2lcrh7oi7o1.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.manikandan.findmate",
+            "package_name": "com.manikandan.findmything",
             "certificate_hash": "af041ef823152a7dbd7a292558f4af6e4e99c732"
           }
         },

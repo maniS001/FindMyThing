@@ -32,7 +32,7 @@ export default function LandingScreen() {
                 showsVerticalScrollIndicator={false}
             >
                 <View style={styles.header}>
-                    <Text style={[styles.title, { color: colors.text }]}>FindMate</Text>
+                    <Text style={[styles.title, { color: colors.text }]}>FindMyThing</Text>
                     <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
                         Reconnecting people with their belongings.
                     </Text>

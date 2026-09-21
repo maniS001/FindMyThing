@@ -53,7 +53,7 @@ export default function IncomingCallModal() {
                         <Text style={styles.avatarText}>{(incoming.senderName || '?')[0].toUpperCase()}</Text>
                     </View>
                     <Text style={styles.callerName}>{incoming.senderName}</Text>
-                    <Text style={styles.subtitle}>FindMate In-App Call</Text>
+                    <Text style={styles.subtitle}>FindMyThing In-App Call</Text>
 
                     <View style={styles.btns}>
                         <TouchableOpacity style={[styles.btn, styles.declineBtn]} onPress={decline}>

@@ -178,7 +178,7 @@ export default function Login() {
                 >
                     {!isKeyboardVisible && (
                         <View style={styles.header}>
-                            <Text style={[styles.title, { color: colors.primary }]}>FindMate</Text>
+                            <Text style={[styles.title, { color: colors.primary }]}>FindMyThing</Text>
                             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
                                 {step === 'phone' ? 'Login with your phone number' : 'Verify your phone'}
                             </Text>

@@ -50,7 +50,7 @@ export default function LocationPicker({ visible, onClose, onSelect, initialLoca
         try {
             const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=5`, {
                 headers: {
-                    'User-Agent': 'FindMateApp/1.0',
+                    'User-Agent': 'FindMyThingApp/1.0',
                     'Accept-Language': 'en-US,en;q=0.9'
                 }
             });
@@ -67,7 +67,7 @@ export default function LocationPicker({ visible, onClose, onSelect, initialLoca
         try {
             const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`, {
                 headers: {
-                    'User-Agent': 'FindMateApp/1.0',
+                    'User-Agent': 'FindMyThingApp/1.0',
                     'Accept-Language': 'en-US,en;q=0.9'
                 }
             });

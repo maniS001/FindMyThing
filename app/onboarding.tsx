@@ -94,7 +94,7 @@ export default function Onboarding() {
             <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
                 <ScrollView contentContainerStyle={styles.scrollContent}>
                     <View style={styles.header}>
-                        <Text style={[styles.title, { color: colors.primary }]}>Welcome to FindMate</Text>
+                        <Text style={[styles.title, { color: colors.primary }]}>Welcome to FindMyThing</Text>
                         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
                             {step === 1 ? "Let's get to know you" : "We need a few permissions"}
                         </Text>
@@ -123,7 +123,7 @@ export default function Onboarding() {
                         {step === 2 && (
                             <>
                                 <Text style={[styles.infoText, { color: colors.text }]}>
-                                    To provide you with the best experience, FindMate uses your location to show lost/found items near you, and your camera to take pictures of items.
+                                    To provide you with the best experience, FindMyThing uses your location to show lost/found items near you, and your camera to take pictures of items.
                                 </Text>
                                 <Button 
                                     title="Grant Permissions & Finish" 

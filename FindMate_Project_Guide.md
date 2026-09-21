@@ -1,17 +1,17 @@
-# FindMate: Technical Project Reference Guide
+# FindMyThing: Technical Project Reference Guide
 
-This document serves as a comprehensive, production-grade guide for your resume, portfolio, and interview preparation. It covers the system architecture, technology stack, engineering decisions, security practices, and troubleshooting lessons from developing **FindMate**.
+This document serves as a comprehensive, production-grade guide for your resume, portfolio, and interview preparation. It covers the system architecture, technology stack, engineering decisions, security practices, and troubleshooting lessons from developing **FindMyThing**.
 
 ---
 
 ## 1. Project Overview & Pitch
 
-**FindMate** is a security-hardened, real-time cross-platform Lost & Found mobile application. It connects **Founders** (people who find lost items) with **Victims** (people searching for their belongings) through an automated matching engine and a multi-tiered verification pipeline. 
+**FindMyThing** is a security-hardened, real-time cross-platform Lost & Found mobile application. It connects **Founders** (people who find lost items) with **Victims** (people searching for their belongings) through an automated matching engine and a multi-tiered verification pipeline. 
 
 ### The Problem It Solves
 Traditional lost-and-found systems (like physical bulletin boards or open social media posts) are inefficient and highly vulnerable to **fraudulent claims**, spam, and bot activity. If a finder posts a photo of a lost wallet online, scammers can easily describe it to claim it.
 
-### The FindMate Solution
+### The FindMyThing Solution
 1. **Automated Geolocation Matching**: Uses a mathematical matching algorithm (Haversine formula + fuzzy string matching) to instantly link lost item complaints with reported found items.
 2. **Multi-Tiered Security claims**: Victims must complete a secure challenge-response pipeline to reveal a founder's contact info:
    - **Math CAPTCHA** (Service-oriented; stops bot abuse).
@@ -83,7 +83,7 @@ When a victim files a complaint, a backend trigger searches the database for pot
 3. **Automated Notification Dispatch**: Instantly triggers a push notification payload if the item is within a specified radius (e.g., 5km) and the categories match.
 
 ### B. Service-Oriented CAPTCHA Verification
-Unlike insecure frontend-only CAPTCHAs, FindMate implements a cryptographically secure, service-oriented CAPTCHA flow:
+Unlike insecure frontend-only CAPTCHAs, FindMyThing implements a cryptographically secure, service-oriented CAPTCHA flow:
 1. **Client** requests a challenge from `/api/captcha/generate`.
 2. **Backend** uses `svg-captcha` to generate a random math expression, registers it in an **in-memory server store** with a unique ID and a 5-minute expiry timestamp, and returns a high-performance **base64 SVG data URI** + `captchaId` to the client.
 3. **Client** displays the SVG dynamically using `expo-image` and prompts the user for the answer.
@@ -178,7 +178,7 @@ npx prisma studio
 ## 6. Resume Bullet Points (Copy & Paste Ready)
 
 * **Cross-Platform Mobile Developer | React Native, Express, PostgreSQL**
-  * Developed and deployed **FindMate**, a secure cross-platform lost & found mobile application using **React Native (Expo SDK 54)** and a **TypeScript/Express** REST API backend.
+  * Developed and deployed **FindMyThing**, a secure cross-platform lost & found mobile application using **React Native (Expo SDK 54)** and a **TypeScript/Express** REST API backend.
   * Designed and built a **multi-tiered claim verification pipeline** containing secure service-oriented math **CAPTCHAs**, **Firebase SMS OTP verification**, and user-defined challenge-response questions to completely eliminate fraudulent claiming.
   * Engineered a high-performance **automated matching engine** utilizing the **Haversine formula** for geographical distance filtering paired with fuzzy string matching of item characteristics.
   * Configured **Expo Push Notification services (FCM V1)**, implementing custom routing payloads to support seamless deep-linking to redirect users straight to matching items upon notification click.
