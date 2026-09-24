@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "FindMyThing",
-    "slug": "findmything",
+    "slug": "findmate",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -86,6 +86,7 @@
       "eas": {
         "projectId": "a3455b6d-df63-4621-8856-f5dd70ec5a5c"
       }
-    }
+    },
+    "owner": "mani_s"
   }
 }
