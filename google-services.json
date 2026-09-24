@@ -10,6 +10,45 @@
       "client_info": {
         "mobilesdk_app_id": "1:1018607704367:android:458fd1820d5683b8b7a9da",
         "android_client_info": {
+          "package_name": "com.manikandan.findmate"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1018607704367-f06382f0qcukig28se4gk803ndn3a3i6.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBfBd_6W9AndpyPJW0gPsBUvlyiG21UWjc"
+        },
+        {
+          "current_key": "AIzaSyBJp83lXFxO2r78eX4kI3nGSz7MCMeSOUc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1018607704367-f06382f0qcukig28se4gk803ndn3a3i6.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "1018607704367-2lflm0p31ir3osqa87rqoi7dkiirie4r.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.manikandan.findmything"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1018607704367:android:b9a6cd0b5bfc75eab7a9da",
+        "android_client_info": {
           "package_name": "com.manikandan.findmything"
         }
       },
@@ -38,6 +77,9 @@
       "api_key": [
         {
           "current_key": "AIzaSyBfBd_6W9AndpyPJW0gPsBUvlyiG21UWjc"
+        },
+        {
+          "current_key": "AIzaSyBJp83lXFxO2r78eX4kI3nGSz7MCMeSOUc"
         }
       ],
       "services": {
@@ -46,6 +88,13 @@
             {
               "client_id": "1018607704367-f06382f0qcukig28se4gk803ndn3a3i6.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "1018607704367-2lflm0p31ir3osqa87rqoi7dkiirie4r.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.manikandan.findmything"
+              }
             }
           ]
         }
