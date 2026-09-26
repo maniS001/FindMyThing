@@ -161,6 +161,10 @@ try {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Health Check Endpoints
+app.get('/health', (req, res) => res.json({ status: 'ok', app: 'FindMyThing Backend', time: new Date() }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', app: 'FindMyThing Backend', time: new Date() }));
+
 // Helper function to calculate distance between two coordinates (Haversine formula)
 function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371; // Earth's radius in km

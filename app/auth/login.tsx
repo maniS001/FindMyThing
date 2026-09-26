@@ -133,7 +133,14 @@ export default function Login() {
                 body: JSON.stringify({ firebaseIdToken, pushToken }),
             });
 
-            const data = await response.json();
+            const responseText = await response.text();
+            let data: any = {};
+            try {
+                data = JSON.parse(responseText);
+            } catch (pErr) {
+                console.error('Non-JSON server response:', responseText);
+                throw new Error(`Server returned error (${response.status}): ${responseText.substring(0, 100)}`);
+            }
 
             if (!response.ok) {
                 if (data.error && data.error.includes('Name is required to register')) {
