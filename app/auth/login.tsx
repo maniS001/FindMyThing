@@ -48,13 +48,6 @@ export default function Login() {
         return () => clearInterval(interval);
     }, [timer]);
 
-    // Force disable app verification in development to allow Test Phone Numbers to work perfectly
-    useEffect(() => {
-        if (__DEV__ && Platform.OS !== 'web') {
-            auth().settings.appVerificationDisabledForTesting = true;
-            console.log('Development mode: appVerificationDisabledForTesting is TRUE');
-        }
-    }, []);
 
     const handleSendOtp = async () => {
         setError('');
@@ -97,12 +90,14 @@ export default function Login() {
             console.error('OTP Send Error:', e);
             
             // Deeply analyzed Firebase Error Handling
-            if (e.code === 'auth/missing-client-identifier' || e.message.includes('missing-client-identifier')) {
-                setError('Google Play Integrity Blocked this request (Common in Dev Builds).\n\nFIX 1: Use a Test Phone Number (added in Firebase Auth -> Phone, with NO SPACES).\n\nFIX 2: Use the Production APK (which is currently building).');
+            if (e.code === 'auth/missing-client-identifier' || e.message?.includes('missing-client-identifier') || e.code === 'auth/missing-app-credential') {
+                setError('Verification failed. Please ensure your internet connection is stable and try again.');
             } else if (e.code === 'auth/too-many-requests') {
-                setError('Too many requests. Firebase has temporarily blocked this device. Please use a Test Phone Number.');
+                setError('Too many attempts. Please wait a few minutes and try again.');
+            } else if (e.code === 'auth/invalid-phone-number') {
+                setError('Invalid phone number. Please check and try again.');
             } else {
-                setError(e.message || 'Failed to send OTP.');
+                setError(e.message || 'Failed to send OTP. Please try again.');
             }
         } finally {
             setLoading(false);
