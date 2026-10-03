@@ -54,6 +54,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "1018607704367-316mgo3vn6hlcjudqauct1kk6r6co9hd.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.manikandan.findmything",
+            "certificate_hash": "562ef8d07cf8f1e06dc55bc5fd9d2f54259bdecd"
+          }
+        },
+        {
           "client_id": "1018607704367-fqajlrfhc82b4a80vn2nv6dqffko1n5p.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
