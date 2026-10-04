@@ -51,6 +51,37 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         setIsFocused(false);
     };
 
+    const useCurrentLocation = () => {
+        setLoading(true);
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                async (position) => {
+                    try {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`);
+                        const data = await res.json();
+                        const address = data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+                        onChange(address, { latitude: lat, longitude: lon });
+                        setQuery(address);
+                        setIsFocused(false);
+                    } catch (e) {
+                        alert("Could not fetch address for this location.");
+                    } finally {
+                        setLoading(false);
+                    }
+                },
+                (error) => {
+                    alert("Location access denied or unavailable.");
+                    setLoading(false);
+                }
+            );
+        } else {
+            alert("Geolocation is not supported by this browser.");
+            setLoading(false);
+        }
+    };
+
     return (
         <View style={styles.wrapper}>
             <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
@@ -70,6 +101,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 />
                 {loading && <ActivityIndicator size="small" color={colors.primary} style={styles.icon} />}
             </View>
+            
+            {/* Added Current Location Button for Web */}
+            <TouchableOpacity onPress={useCurrentLocation} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, padding: 4 }}>
+                <MapPin size={16} color={colors.primary} style={{ marginRight: 6 }} />
+                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Use my current location</Text>
+            </TouchableOpacity>
 
             {isFocused && results.length > 0 && (
                 <View style={[styles.dropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
