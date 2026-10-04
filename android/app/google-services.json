@@ -78,6 +78,14 @@
           }
         },
         {
+          "client_id": "1018607704367-pfq34ga49q5ps0jtvu1oqstug5pgsp70.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.manikandan.findmything",
+            "certificate_hash": "7e8eeebeb8f94ec7767df7937a95d8a57cb79c16"
+          }
+        },
+        {
           "client_id": "1018607704367-f06382f0qcukig28se4gk803ndn3a3i6.apps.googleusercontent.com",
           "client_type": 3
         }
