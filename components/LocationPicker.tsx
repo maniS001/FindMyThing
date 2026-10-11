@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
-import { MapPin, X, Navigation, Search, Check } from 'lucide-react-native';
+import { MapPin, X, Navigation, Search } from 'lucide-react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../contexts/ThemeContext';
 import Input from './Input';
 
@@ -47,10 +48,10 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
     const [userCoords, setUserCoords] = useState<{ lat: number, lon: number } | null>(null);
 
     const [region, setRegion] = useState<Region>({
-        latitude: 20.5937,
-        longitude: 78.9629,
-        latitudeDelta: 10,
-        longitudeDelta: 10,
+        latitude: 11.3992,
+        longitude: 79.6935,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
     });
     const [markerCoord, setMarkerCoord] = useState<{ latitude: number, longitude: number } | null>(null);
 
@@ -61,15 +62,31 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, [modalVisible, value]);
 
-    // Silently check last known location on mount to bias search results
+    // Restore cached location and check current location
     useEffect(() => {
         (async () => {
             try {
+                const cached = await AsyncStorage.getItem('@findmate_user_coords');
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    if (parsed?.lat && parsed?.lon) {
+                        setUserCoords(parsed);
+                        setRegion({
+                            latitude: parsed.lat,
+                            longitude: parsed.lon,
+                            latitudeDelta: 0.05,
+                            longitudeDelta: 0.05,
+                        });
+                    }
+                }
+
                 const { status } = await Location.getForegroundPermissionsAsync();
                 if (status === 'granted') {
-                    const loc = await Location.getLastKnownPositionAsync() || await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+                    const loc = await Location.getLastKnownPositionAsync() || await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
                     if (loc) {
-                        setUserCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+                        const coords = { lat: loc.coords.latitude, lon: loc.coords.longitude };
+                        setUserCoords(coords);
+                        await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
                     }
                 }
             } catch {}
@@ -95,19 +112,49 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
             return;
         }
         setLoading(true);
+
+        const cleanQuery = text
+            .replace(/busstand/gi, 'bus stand')
+            .replace(/railwaystation/gi, 'railway station')
+            .replace(/policestation/gi, 'police station');
+
         try {
-            let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=8&countrycodes=in`;
+            let data: any[] = [];
+
+            // Tier 1: Search strictly within ~35km of current location (bounded=1)
             if (userCoords) {
-                const minLon = userCoords.lon - 0.4;
-                const maxLat = userCoords.lat + 0.4;
-                const maxLon = userCoords.lon + 0.4;
-                const minLat = userCoords.lat - 0.4;
-                url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+                const minLon = userCoords.lon - 0.35;
+                const maxLat = userCoords.lat + 0.35;
+                const maxLon = userCoords.lon + 0.35;
+                const minLat = userCoords.lat - 0.35;
+                const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
+                const nearbyRes = await fetch(nearbyUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const nearbyData = await nearbyRes.json();
+                if (Array.isArray(nearbyData) && nearbyData.length > 0) {
+                    data = nearbyData;
+                }
             }
-            const res = await fetch(url, {
-                headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-            });
-            const data = await res.json();
+
+            // Tier 2: Fallback to wider search if nothing found in strict radius
+            if (data.length === 0) {
+                let fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in`;
+                if (userCoords) {
+                    const minLon = userCoords.lon - 1.0;
+                    const maxLat = userCoords.lat + 1.0;
+                    const maxLon = userCoords.lon + 1.0;
+                    const minLat = userCoords.lat - 1.0;
+                    fallbackUrl += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+                }
+                const fallbackRes = await fetch(fallbackUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const fallbackData = await fallbackRes.json();
+                if (Array.isArray(fallbackData)) {
+                    data = fallbackData;
+                }
+            }
             
             if (Array.isArray(data)) {
                 let mapped: LocationResult[] = data.map((item: any) => {
@@ -146,22 +193,35 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 alert('Permission to access location was denied');
                 return;
             }
-            const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-            setUserCoords({ lat: location.coords.latitude, lon: location.coords.longitude });
+            // Use High Accuracy for GPS satellite lock on phones
+            const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+            const coords = { lat: location.coords.latitude, lon: location.coords.longitude };
+            setUserCoords(coords);
+            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
+
             const address = await reverseGeocode(location.coords.latitude, location.coords.longitude);
             
             onChange(address, { latitude: location.coords.latitude, longitude: location.coords.longitude });
             setModalVisible(false);
         } catch (error) {
-            alert('Failed to get current location. Please ensure GPS is turned on.');
+            alert('Failed to get current location. Please ensure device GPS is turned on.');
         } finally {
             setLoading(false);
             setLocatingInline(false);
         }
     };
 
-    const handleSelectResult = (item: LocationResult) => {
-        onChange(item.display_name, { latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
+    const handleSelectResult = async (item: LocationResult) => {
+        const lat = parseFloat(item.lat);
+        const lon = parseFloat(item.lon);
+        onChange(item.display_name, { latitude: lat, longitude: lon });
+        
+        // Cache selected coords for future proximity searches
+        setUserCoords({ lat, lon });
+        try {
+            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify({ lat, lon }));
+        } catch {}
+
         setModalVisible(false);
     };
 
@@ -170,6 +230,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         setLoading(true);
         const address = await reverseGeocode(markerCoord.latitude, markerCoord.longitude);
         onChange(address, { latitude: markerCoord.latitude, longitude: markerCoord.longitude });
+        
+        setUserCoords({ lat: markerCoord.latitude, lon: markerCoord.longitude });
+        try {
+            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify({ lat: markerCoord.latitude, lon: markerCoord.longitude }));
+        } catch {}
+
         setLoading(false);
         setModalVisible(false);
     };
@@ -179,8 +245,9 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
             setLoading(true);
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status === 'granted') {
-                const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                setUserCoords({ lat: location.coords.latitude, lon: location.coords.longitude });
+                const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+                const coords = { lat: location.coords.latitude, lon: location.coords.longitude };
+                setUserCoords(coords);
                 setRegion({
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,

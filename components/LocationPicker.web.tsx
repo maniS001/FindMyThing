@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator, Modal } from 'react-native';
 import { MapPin, Search, Navigation, X, Check } from 'lucide-react-native';
 import { useTheme } from '../contexts/ThemeContext';
@@ -53,18 +53,18 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, [value]);
 
-    // Silently detect user coordinates on mount to bias search results nearby
+    // Restore cached location from localStorage if available
     useEffect(() => {
-        if (typeof navigator !== 'undefined' && navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                (pos) => {
-                    setUserCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-                },
-                () => {
-                    // Geolocation not granted yet - will request on button press
-                },
-                { enableHighAccuracy: false, timeout: 6000 }
-            );
+        if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+                const cached = window.localStorage.getItem('findmate_user_coords');
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    if (parsed?.lat && parsed?.lon) {
+                        setUserCoords(parsed);
+                    }
+                }
+            } catch {}
         }
     }, []);
 
@@ -96,7 +96,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, []);
 
-    // Search places with proximity biasing
+    // Search places with strict two-tier proximity biasing
     const searchPlaces = async (text: string) => {
         setQuery(text);
         if (text.length < 2) {
@@ -104,20 +104,50 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
             return;
         }
         setLoading(true);
+
+        // Normalize common Indian compound words (e.g. busstand -> bus stand)
+        const cleanQuery = text
+            .replace(/busstand/gi, 'bus stand')
+            .replace(/railwaystation/gi, 'railway station')
+            .replace(/policestation/gi, 'police station');
+
         try {
-            let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=8&countrycodes=in`;
+            let data: any[] = [];
+
+            // Tier 1: Search strictly within ~35km of current location (bounded=1)
             if (userCoords) {
-                // Bias to ~40km around user
-                const minLon = userCoords.lon - 0.4;
-                const maxLat = userCoords.lat + 0.4;
-                const maxLon = userCoords.lon + 0.4;
-                const minLat = userCoords.lat - 0.4;
-                url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+                const minLon = userCoords.lon - 0.35;
+                const maxLat = userCoords.lat + 0.35;
+                const maxLon = userCoords.lon + 0.35;
+                const minLat = userCoords.lat - 0.35;
+                const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
+                const nearbyRes = await fetch(nearbyUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const nearbyData = await nearbyRes.json();
+                if (Array.isArray(nearbyData) && nearbyData.length > 0) {
+                    data = nearbyData;
+                }
             }
-            const res = await fetch(url, {
-                headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-            });
-            const data = await res.json();
+
+            // Tier 2: Fallback to wider search if nothing found in strict radius
+            if (data.length === 0) {
+                let fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in`;
+                if (userCoords) {
+                    const minLon = userCoords.lon - 1.0;
+                    const maxLat = userCoords.lat + 1.0;
+                    const maxLon = userCoords.lon + 1.0;
+                    const minLat = userCoords.lat - 1.0;
+                    fallbackUrl += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+                }
+                const fallbackRes = await fetch(fallbackUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const fallbackData = await fallbackRes.json();
+                if (Array.isArray(fallbackData)) {
+                    data = fallbackData;
+                }
+            }
             
             if (Array.isArray(data)) {
                 let mapped: LocationResult[] = data.map((item: any) => {
@@ -133,7 +163,6 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     };
                 });
 
-                // Sort closest to current location first
                 if (userCoords) {
                     mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
                 }
@@ -150,7 +179,18 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
     const handleSelectResult = (item: LocationResult) => {
         setQuery(item.display_name);
-        onChange(item.display_name, { latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
+        const lat = parseFloat(item.lat);
+        const lon = parseFloat(item.lon);
+        onChange(item.display_name, { latitude: lat, longitude: lon });
+        
+        // Anchor userCoords to selected location and cache it
+        setUserCoords({ lat, lon });
+        if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+                window.localStorage.setItem('findmate_user_coords', JSON.stringify({ lat, lon }));
+            } catch {}
+        }
+        
         setResults([]);
         setIsFocused(false);
     };
@@ -164,6 +204,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                         const lat = position.coords.latitude;
                         const lon = position.coords.longitude;
                         setUserCoords({ lat, lon });
+                        if (typeof window !== 'undefined' && window.localStorage) {
+                            try {
+                                window.localStorage.setItem('findmate_user_coords', JSON.stringify({ lat, lon }));
+                            } catch {}
+                        }
+
                         const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
                             headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
                         });
@@ -179,10 +225,10 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     }
                 },
                 (error) => {
-                    alert("Location access denied or unavailable. Please enable location permissions.");
+                    alert("Location access denied or unavailable. Please enable device location / GPS permissions in your browser.");
                     setLocating(false);
                 },
-                { enableHighAccuracy: true, timeout: 10000 }
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
             );
         } else {
             alert("Geolocation is not supported by this browser.");
@@ -191,8 +237,8 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
     };
 
     const openMapModal = () => {
-        const initialLat = userCoords?.lat || (pinnedCoords ? pinnedCoords.lat : 13.0827); // default Chennai/India
-        const initialLon = userCoords?.lon || (pinnedCoords ? pinnedCoords.lon : 80.2707);
+        const initialLat = userCoords?.lat || (pinnedCoords ? pinnedCoords.lat : 11.3992); // default Chidambaram / TN
+        const initialLon = userCoords?.lon || (pinnedCoords ? pinnedCoords.lon : 79.6935);
         setPinnedCoords({ lat: initialLat, lon: initialLon });
         setMapModalVisible(true);
     };
@@ -202,6 +248,15 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         const address = pinAddress || `${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lon.toFixed(4)}`;
         onChange(address, { latitude: pinnedCoords.lat, longitude: pinnedCoords.lon });
         setQuery(address);
+        
+        // Anchor userCoords to confirmed map pin
+        setUserCoords(pinnedCoords);
+        if (typeof window !== 'undefined' && window.localStorage) {
+            try {
+                window.localStorage.setItem('findmate_user_coords', JSON.stringify(pinnedCoords));
+            } catch {}
+        }
+        
         setMapModalVisible(false);
     };
 
@@ -226,11 +281,11 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
       </style>
     </head>
     <body>
-      <div class="hint">📍 Click or drag the marker to choose location</div>
+      <div class="hint">📍 Tap or drag marker to set exact position</div>
       <div id="map"></div>
       <script>
-        var initialLat = ${pinnedCoords?.lat || userCoords?.lat || 13.0827};
-        var initialLng = ${pinnedCoords?.lon || userCoords?.lon || 80.2707};
+        var initialLat = ${pinnedCoords?.lat || userCoords?.lat || 11.3992};
+        var initialLng = ${pinnedCoords?.lon || userCoords?.lon || 79.6935};
         var map = L.map('map').setView([initialLat, initialLng], 14);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
@@ -311,7 +366,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 </TouchableOpacity>
             </View>
 
-            {/* Auto-suggest Dropdown with Proximity Info */}
+            {/* Auto-suggest Dropdown with Strict Proximity Info */}
             {isFocused && results.length > 0 && (
                 <View style={[styles.dropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <View style={[styles.dropdownHeader, { borderBottomColor: colors.border }]}>
