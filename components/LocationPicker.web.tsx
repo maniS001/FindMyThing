@@ -29,6 +29,53 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): 
     return R * c;
 }
 
+// Resilient multi-engine reverse geocoder (BigDataCloud -> Nominatim -> Photon -> Coords)
+async function fetchAddressForCoords(lat: number, lon: number): Promise<string> {
+    // Engine 1: BigDataCloud (fast, zero rate limits, client-friendly)
+    try {
+        const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+        if (bdcRes.ok) {
+            const bdc = await bdcRes.json();
+            const locality = bdc.locality || bdc.city || '';
+            const district = bdc.localityInfo?.administrative?.find((a: any) => a.order >= 8 && a.order <= 11)?.name || '';
+            const state = bdc.principalSubdivision || '';
+            const parts = [locality, district !== locality ? district : '', state].filter(Boolean);
+            if (parts.length > 0) {
+                return parts.join(', ');
+            }
+        }
+    } catch {}
+
+    // Engine 2: OpenStreetMap Nominatim
+    try {
+        const nomRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=16&addressdetails=1`, {
+            headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+        });
+        if (nomRes.ok) {
+            const nom = await nomRes.json();
+            if (nom && nom.display_name && !nom.error) {
+                return nom.display_name;
+            }
+        }
+    } catch {}
+
+    // Engine 3: Photon reverse
+    try {
+        const photonRes = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
+        if (photonRes.ok) {
+            const pData = await photonRes.json();
+            const p = pData.features?.[0]?.properties;
+            if (p) {
+                const parts = [p.name, p.street, p.city || p.district, p.state].filter(Boolean);
+                if (parts.length > 0) return parts.join(', ');
+            }
+        }
+    } catch {}
+
+    // Guaranteed fallback: neat coordinate label
+    return `Location (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+}
+
 export default function LocationPicker({ label, value, onChange, placeholder = "Search location or choose on map..." }: LocationPickerProps) {
     const { colors } = useTheme();
     const [isFocused, setIsFocused] = useState(false);
@@ -53,16 +100,14 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, [value]);
 
-    // Fetch user GPS coordinates on mount (like Rapido / Google Maps)
+    // Silently detect actual device GPS coordinates on mount
     useEffect(() => {
         if (typeof navigator !== 'undefined' && navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     setUserCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
                 },
-                () => {
-                    // Silently ignore if not granted yet
-                },
+                () => {},
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         }
@@ -77,25 +122,10 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 setPinnedCoords({ lat, lon });
                 setPinLoading(true);
                 try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=18&addressdetails=1`, {
-                        headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                    });
-                    const data = await res.json();
-                    let formatted = data.display_name;
-                    if (data.address) {
-                        const addr = data.address;
-                        const parts = [
-                            addr.road || addr.suburb || addr.village || addr.neighbourhood || addr.hamlet,
-                            addr.town || addr.city || addr.county,
-                            addr.state_district,
-                            addr.state,
-                            addr.postcode
-                        ].filter(Boolean);
-                        if (parts.length > 0) formatted = parts.join(', ');
-                    }
-                    setPinAddress(formatted || `${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+                    const address = await fetchAddressForCoords(lat, lon);
+                    setPinAddress(address);
                 } catch {
-                    setPinAddress(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+                    setPinAddress(`Location (${lat.toFixed(4)}, ${lon.toFixed(4)})`);
                 } finally {
                     setPinLoading(false);
                 }
@@ -108,7 +138,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, []);
 
-    // Search places nearby within 50 km radius
+    // Search places nearby within 50 km radius, strictly sorted by closest distance
     const searchPlaces = async (text: string) => {
         setQuery(text);
         if (text.length < 2) {
@@ -117,74 +147,95 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
         setLoading(true);
 
-        // Normalize common Indian compound words
         const cleanQuery = text
             .replace(/busstand/gi, 'bus stand')
             .replace(/railwaystation/gi, 'railway station')
             .replace(/policestation/gi, 'police station');
 
         try {
-            let data: any[] = [];
             const coords = userCoords;
+            let combined: LocationResult[] = [];
 
-            // 50 km bounding box delta: 50km / 111km/deg ≈ 0.45 degrees
+            // Query Engine 1: Photon with GPS proximity bias
+            try {
+                let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQuery)}&limit=15`;
+                if (coords) {
+                    photonUrl += `&lat=${coords.lat}&lon=${coords.lon}`;
+                }
+                const pRes = await fetch(photonUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0' }
+                });
+                if (pRes.ok) {
+                    const pData = await pRes.json();
+                    const features = pData.features || [];
+                    for (const f of features) {
+                        const p = f.properties || {};
+                        const c = f.geometry?.coordinates || [0, 0];
+                        const itemLon = c[0];
+                        const itemLat = c[1];
+                        const dist = coords ? getDistanceKm(coords.lat, coords.lon, itemLat, itemLon) : undefined;
+                        const name = p.name || p.street || cleanQuery;
+                        const placeDetails = [name, p.city || p.district || p.state].filter(Boolean).join(', ');
+                        
+                        combined.push({
+                            place_id: `photon-${itemLat}-${itemLon}`,
+                            display_name: placeDetails,
+                            lat: String(itemLat),
+                            lon: String(itemLon),
+                            distanceKm: dist,
+                        });
+                    }
+                }
+            } catch {}
+
+            // Query Engine 2: OpenStreetMap Nominatim with viewbox if Photon had few results
+            if (combined.length < 5 && coords) {
+                try {
+                    const delta = 0.45; // ~50 km
+                    const minLon = coords.lon - delta;
+                    const maxLat = coords.lat + delta;
+                    const maxLon = coords.lon + delta;
+                    const minLat = coords.lat - delta;
+                    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=10&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
+                    const nomRes = await fetch(nomUrl, {
+                        headers: { 'User-Agent': 'FindMyThingApp/1.0' }
+                    });
+                    if (nomRes.ok) {
+                        const nomData = await nomRes.json();
+                        if (Array.isArray(nomData)) {
+                            for (const item of nomData) {
+                                const itemLat = parseFloat(item.lat);
+                                const itemLon = parseFloat(item.lon);
+                                const dist = getDistanceKm(coords.lat, coords.lon, itemLat, itemLon);
+                                combined.push({
+                                    place_id: item.place_id,
+                                    display_name: item.display_name,
+                                    lat: item.lat,
+                                    lon: item.lon,
+                                    distanceKm: dist,
+                                });
+                            }
+                        }
+                    }
+                } catch {}
+            }
+
+            // Deduplicate by proximity and coordinates
+            const seen = new Set<string>();
+            let filtered = combined.filter((item) => {
+                const key = `${parseFloat(item.lat).toFixed(3)}_${parseFloat(item.lon).toFixed(3)}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+
+            // Filter to 50 km and STRICTLY sort closest distance first
             if (coords) {
-                const delta = 0.45;
-                const minLon = coords.lon - delta;
-                const maxLat = coords.lat + delta;
-                const maxLon = coords.lon + delta;
-                const minLat = coords.lat - delta;
-
-                const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=15&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
-                const nearbyRes = await fetch(nearbyUrl, {
-                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                });
-                const nearbyData = await nearbyRes.json();
-                if (Array.isArray(nearbyData) && nearbyData.length > 0) {
-                    data = nearbyData;
-                }
+                filtered = filtered.filter((item) => item.distanceKm === undefined || item.distanceKm <= 50.0);
+                filtered.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
             }
 
-            // Fallback search if no nearby results within 50km or no GPS yet
-            if (data.length === 0) {
-                let fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=15&countrycodes=in`;
-                if (coords) {
-                    const delta = 1.0;
-                    fallbackUrl += `&viewbox=${coords.lon - delta},${coords.lat + delta},${coords.lon + delta},${coords.lat - delta}&bounded=0`;
-                }
-                const fallbackRes = await fetch(fallbackUrl, {
-                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                });
-                const fallbackData = await fallbackRes.json();
-                if (Array.isArray(fallbackData)) {
-                    data = fallbackData;
-                }
-            }
-
-            if (Array.isArray(data)) {
-                let mapped: LocationResult[] = data.map((item: any) => {
-                    const itemLat = parseFloat(item.lat);
-                    const itemLon = parseFloat(item.lon);
-                    const dist = coords ? getDistanceKm(coords.lat, coords.lon, itemLat, itemLon) : undefined;
-                    return {
-                        place_id: item.place_id,
-                        display_name: item.display_name,
-                        lat: item.lat,
-                        lon: item.lon,
-                        distanceKm: dist,
-                    };
-                });
-
-                // Filter to 50km if GPS is active
-                if (coords) {
-                    mapped = mapped.filter((item) => item.distanceKm === undefined || item.distanceKm <= 50.0);
-                    mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
-                }
-
-                setResults(mapped);
-            } else {
-                setResults([]);
-            }
+            setResults(filtered);
         } catch (error) {
             console.error('Search error', error);
         } finally {
@@ -201,7 +252,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         setIsFocused(false);
     };
 
-    // Use Device Hardware GPS location (like Rapido / Uber)
+    // Use Device Hardware GPS location (like Rapido / Swiggy)
     const useCurrentLocation = () => {
         setLocating(true);
         if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -212,30 +263,18 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                         const lon = position.coords.longitude;
                         setUserCoords({ lat, lon });
 
-                        // High precision reverse geocode (zoom 18 = house/street/village level)
-                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=18&addressdetails=1`, {
-                            headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                        });
-                        const data = await res.json();
-                        
-                        let formattedAddress = data.display_name;
-                        if (data.address) {
-                            const addr = data.address;
-                            const parts = [
-                                addr.road || addr.suburb || addr.village || addr.neighbourhood || addr.hamlet,
-                                addr.town || addr.city || addr.county,
-                                addr.state_district,
-                                addr.state,
-                                addr.postcode
-                            ].filter(Boolean);
-                            if (parts.length > 0) formattedAddress = parts.join(', ');
-                        }
+                        // Resilient address resolution: never crashes, always finds least nearest location
+                        const resolvedAddress = await fetchAddressForCoords(lat, lon);
 
-                        onChange(formattedAddress, { latitude: lat, longitude: lon });
-                        setQuery(formattedAddress);
+                        onChange(resolvedAddress, { latitude: lat, longitude: lon });
+                        setQuery(resolvedAddress);
                         setIsFocused(false);
                     } catch (e) {
-                        alert("Could not fetch address for your current position.");
+                        // Even on network error, gracefully set coordinates
+                        const fallback = `Location (${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)})`;
+                        onChange(fallback, { latitude: position.coords.latitude, longitude: position.coords.longitude });
+                        setQuery(fallback);
+                        setIsFocused(false);
                     } finally {
                         setLocating(false);
                     }
@@ -265,7 +304,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
     const confirmMapSelection = () => {
         if (!pinnedCoords) return;
-        const address = pinAddress || `${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lon.toFixed(4)}`;
+        const address = pinAddress || `Location (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lon.toFixed(4)})`;
         onChange(address, { latitude: pinnedCoords.lat, longitude: pinnedCoords.lon });
         setQuery(address);
         setUserCoords(pinnedCoords);
@@ -378,12 +417,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 </TouchableOpacity>
             </View>
 
-            {/* Auto-suggest Dropdown Showing 50 km Results */}
+            {/* Auto-suggest Dropdown Strictly Showing Closest First (within 50 km) */}
             {isFocused && (
                 <View style={[styles.dropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <View style={[styles.dropdownHeader, { borderBottomColor: colors.border }]}>
                         <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase' }}>
-                            {userCoords ? 'Nearby Places (within 50 km)' : 'Matching Locations'}
+                            {userCoords ? 'Nearby Places (within 50 km, closest first)' : 'Matching Locations'}
                         </Text>
                     </View>
 
@@ -410,13 +449,13 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                     </View>
                                 </TouchableOpacity>
                             )}
-                            style={{ maxHeight: 240 }}
+                            style={{ maxHeight: 260 }}
                         />
                     ) : (
                         query.length >= 2 && !loading ? (
                             <View style={{ padding: 16 }}>
                                 <Text style={{ color: colors.textSecondary, fontSize: 13, lineHeight: 18 }}>
-                                    No locations found matching "{query}" within 50 km. Try searching or pick on map.
+                                    No places found matching "{query}" within 50 km. Try searching or pick on map.
                                 </Text>
                             </View>
                         ) : null
@@ -527,7 +566,7 @@ const styles = StyleSheet.create({
         right: 0,
         borderWidth: 1,
         borderRadius: 12,
-        maxHeight: 260,
+        maxHeight: 280,
         zIndex: 9999,
         elevation: 8,
         shadowColor: '#000',
