@@ -7,6 +7,7 @@ import CategoryPicker from '../../components/CategoryPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
 import Input from '../../components/Input';
+import LocationPicker from '../../components/LocationPicker';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_URL } from '../../constants/api';
@@ -24,6 +25,7 @@ export default function SearchLostItem() {
         contactInfo: '',
         imageUris: [] as string[],
     });
+    const [locationCoords, setLocationCoords] = useState<{ lat: number; lon: number } | null>(null);
     const [errors, setErrors] = useState({ name: '', location: '', contactInfo: '' });
     const [date, setDate] = useState(new Date());
     const [aiLoading, setAiLoading] = useState(false);
@@ -140,6 +142,8 @@ export default function SearchLostItem() {
             pathname: '/victim/results',
             params: {
                 ...form,
+                latitude: locationCoords ? String(locationCoords.lat) : '',
+                longitude: locationCoords ? String(locationCoords.lon) : '',
                 date: date.toISOString().split('T')[0],
                 imageUris: JSON.stringify(form.imageUris),
                 cashPrize: cashPrize.trim() || '',
@@ -183,15 +187,15 @@ export default function SearchLostItem() {
                             onChange={(category) => setForm({ ...form, category })}
                         />
 
-                        <Input
+                        <LocationPicker
                             label="Where did you lose it? *"
-                            placeholder="e.g. Central Park"
                             value={form.location}
-                            onChangeText={(text) => {
-                                setForm({ ...form, location: text });
+                            placeholder="Search location or choose on map..."
+                            onChange={(location, coords) => {
+                                setForm({ ...form, location });
+                                setLocationCoords(coords ? { lat: coords.latitude, lon: coords.longitude } : null);
                                 if (errors.location) setErrors({ ...errors, location: '' });
                             }}
-                            error={errors.location}
                         />
 
                         <DatePicker

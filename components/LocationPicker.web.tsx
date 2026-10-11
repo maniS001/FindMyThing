@@ -1,13 +1,14 @@
-import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
-import { MapPin, Search } from 'lucide-react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, ActivityIndicator, Modal } from 'react-native';
+import { MapPin, Search, Navigation, X, Check } from 'lucide-react-native';
 import { useTheme } from '../contexts/ThemeContext';
-import Input from './Input';
 
 interface LocationResult {
-    address: string;
-    lat: number;
-    lon: number;
+    place_id: string | number;
+    display_name: string;
+    lat: string;
+    lon: string;
+    distanceKm?: number;
 }
 
 interface LocationPickerProps {
@@ -17,26 +18,129 @@ interface LocationPickerProps {
     placeholder?: string;
 }
 
+function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
 export default function LocationPicker({ label, value, onChange, placeholder = "Search location..." }: LocationPickerProps) {
     const { colors } = useTheme();
     const [isFocused, setIsFocused] = useState(false);
     const [query, setQuery] = useState(value || '');
-    const [results, setResults] = useState<any[]>([]);
+    const [results, setResults] = useState<LocationResult[]>([]);
     const [loading, setLoading] = useState(false);
+    const [locating, setLocating] = useState(false);
+    
+    // User GPS location for nearby biasing
+    const [userCoords, setUserCoords] = useState<{ lat: number, lon: number } | null>(null);
 
+    // Map modal state (Web interactive map)
+    const [mapModalVisible, setMapModalVisible] = useState(false);
+    const [pinnedCoords, setPinnedCoords] = useState<{ lat: number, lon: number } | null>(null);
+    const [pinAddress, setPinAddress] = useState<string>('');
+    const [pinLoading, setPinLoading] = useState(false);
+
+    // Sync external value
+    useEffect(() => {
+        if (value !== undefined && value !== query) {
+            setQuery(value);
+        }
+    }, [value]);
+
+    // Silently detect user coordinates on mount to bias search results nearby
+    useEffect(() => {
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                    setUserCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+                },
+                () => {
+                    // Geolocation not granted yet - will request on button press
+                },
+                { enableHighAccuracy: false, timeout: 6000 }
+            );
+        }
+    }, []);
+
+    // Listen to messages from Leaflet map iframe
+    useEffect(() => {
+        const handleMessage = async (e: any) => {
+            if (e.data && e.data.type === 'FINDMATE_PIN_SELECTED') {
+                const lat = parseFloat(e.data.lat);
+                const lon = parseFloat(e.data.lon);
+                setPinnedCoords({ lat, lon });
+                setPinLoading(true);
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
+                        headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                    });
+                    const data = await res.json();
+                    setPinAddress(data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+                } catch {
+                    setPinAddress(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+                } finally {
+                    setPinLoading(false);
+                }
+            }
+        };
+
+        if (typeof window !== 'undefined') {
+            window.addEventListener('message', handleMessage);
+            return () => window.removeEventListener('message', handleMessage);
+        }
+    }, []);
+
+    // Search places with proximity biasing
     const searchPlaces = async (text: string) => {
         setQuery(text);
-        if (text.length < 3) {
+        if (text.length < 2) {
             setResults([]);
             return;
         }
         setLoading(true);
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=5&countrycodes=in`, {
+            let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=8&countrycodes=in`;
+            if (userCoords) {
+                // Bias to ~40km around user
+                const minLon = userCoords.lon - 0.4;
+                const maxLat = userCoords.lat + 0.4;
+                const maxLon = userCoords.lon + 0.4;
+                const minLat = userCoords.lat - 0.4;
+                url += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
+            }
+            const res = await fetch(url, {
                 headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
             });
             const data = await res.json();
-            setResults(data);
+            
+            if (Array.isArray(data)) {
+                let mapped: LocationResult[] = data.map((item: any) => {
+                    const itemLat = parseFloat(item.lat);
+                    const itemLon = parseFloat(item.lon);
+                    const dist = userCoords ? getDistanceKm(userCoords.lat, userCoords.lon, itemLat, itemLon) : undefined;
+                    return {
+                        place_id: item.place_id,
+                        display_name: item.display_name,
+                        lat: item.lat,
+                        lon: item.lon,
+                        distanceKm: dist,
+                    };
+                });
+
+                // Sort closest to current location first
+                if (userCoords) {
+                    mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+                }
+                setResults(mapped);
+            } else {
+                setResults([]);
+            }
         } catch (error) {
             console.error('Search error', error);
         } finally {
@@ -44,7 +148,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     };
 
-    const handleSelectResult = (item: any) => {
+    const handleSelectResult = (item: LocationResult) => {
         setQuery(item.display_name);
         onChange(item.display_name, { latitude: parseFloat(item.lat), longitude: parseFloat(item.lon) });
         setResults([]);
@@ -52,14 +156,17 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
     };
 
     const useCurrentLocation = () => {
-        setLoading(true);
-        if (navigator.geolocation) {
+        setLocating(true);
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
                 async (position) => {
                     try {
                         const lat = position.coords.latitude;
                         const lon = position.coords.longitude;
-                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`);
+                        setUserCoords({ lat, lon });
+                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
+                            headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                        });
                         const data = await res.json();
                         const address = data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
                         onChange(address, { latitude: lat, longitude: lon });
@@ -68,24 +175,96 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     } catch (e) {
                         alert("Could not fetch address for this location.");
                     } finally {
-                        setLoading(false);
+                        setLocating(false);
                     }
                 },
                 (error) => {
-                    alert("Location access denied or unavailable.");
-                    setLoading(false);
-                }
+                    alert("Location access denied or unavailable. Please enable location permissions.");
+                    setLocating(false);
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
             );
         } else {
             alert("Geolocation is not supported by this browser.");
-            setLoading(false);
+            setLocating(false);
         }
     };
 
+    const openMapModal = () => {
+        const initialLat = userCoords?.lat || (pinnedCoords ? pinnedCoords.lat : 13.0827); // default Chennai/India
+        const initialLon = userCoords?.lon || (pinnedCoords ? pinnedCoords.lon : 80.2707);
+        setPinnedCoords({ lat: initialLat, lon: initialLon });
+        setMapModalVisible(true);
+    };
+
+    const confirmMapSelection = () => {
+        if (!pinnedCoords) return;
+        const address = pinAddress || `${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lon.toFixed(4)}`;
+        onChange(address, { latitude: pinnedCoords.lat, longitude: pinnedCoords.lon });
+        setQuery(address);
+        setMapModalVisible(false);
+    };
+
+    // Leaflet HTML string for the web map iframe
+    const mapHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+      <style>
+        html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; }
+        .hint {
+          position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+          background: rgba(17, 24, 39, 0.85); color: #ffffff; padding: 6px 16px;
+          border-radius: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font-size: 13px; font-weight: 500; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+          pointer-events: none;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="hint">📍 Click or drag the marker to choose location</div>
+      <div id="map"></div>
+      <script>
+        var initialLat = ${pinnedCoords?.lat || userCoords?.lat || 13.0827};
+        var initialLng = ${pinnedCoords?.lon || userCoords?.lon || 80.2707};
+        var map = L.map('map').setView([initialLat, initialLng], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        var marker = L.marker([initialLat, initialLng], { draggable: true }).addTo(map);
+
+        function sendPin(lat, lng) {
+          window.parent.postMessage({ type: 'FINDMATE_PIN_SELECTED', lat: lat, lon: lng }, '*');
+        }
+
+        sendPin(initialLat, initialLng);
+
+        marker.on('dragend', function(e) {
+          var pos = marker.getLatLng();
+          sendPin(pos.lat, pos.lng);
+        });
+
+        map.on('click', function(e) {
+          marker.setLatLng(e.latlng);
+          sendPin(e.latlng.lat, e.latlng.lng);
+        });
+      </script>
+    </body>
+    </html>
+    `;
+
     return (
         <View style={styles.wrapper}>
-            <Text style={[styles.label, { color: colors.text }]}>{label}</Text>
-            <View style={[styles.inputContainer, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            {label ? <Text style={[styles.label, { color: colors.text }]}>{label}</Text> : null}
+            
+            {/* Search Input Box */}
+            <View style={[styles.inputContainer, { borderColor: isFocused ? colors.primary : colors.border, backgroundColor: colors.surface }]}>
                 <Search size={20} color={colors.textSecondary} style={styles.icon} />
                 <TextInput
                     style={[styles.input, { color: colors.text }]}
@@ -95,38 +274,123 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     onChangeText={searchPlaces}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => {
-                        // Delay blur to allow item press
-                        setTimeout(() => setIsFocused(false), 200);
+                        setTimeout(() => setIsFocused(false), 250);
                     }}
                 />
                 {loading && <ActivityIndicator size="small" color={colors.primary} style={styles.icon} />}
+                {query.length > 0 && !loading && (
+                    <TouchableOpacity onPress={() => { setQuery(''); onChange(''); setResults([]); }}>
+                        <X size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
+                    </TouchableOpacity>
+                )}
             </View>
-            
-            {/* Added Current Location Button for Web */}
-            <TouchableOpacity onPress={useCurrentLocation} style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, padding: 4 }}>
-                <MapPin size={16} color={colors.primary} style={{ marginRight: 6 }} />
-                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Use my current location</Text>
-            </TouchableOpacity>
 
+            {/* Quick Action Options directly under field */}
+            <View style={styles.actionRow}>
+                <TouchableOpacity 
+                    onPress={useCurrentLocation} 
+                    style={[styles.actionBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                    disabled={locating}
+                >
+                    {locating ? (
+                        <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 6 }} />
+                    ) : (
+                        <Navigation size={15} color={colors.primary} style={{ marginRight: 6 }} />
+                    )}
+                    <Text style={[styles.actionText, { color: colors.primary }]}>
+                        {locating ? 'Locating...' : 'Use my current location'}
+                    </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                    onPress={openMapModal} 
+                    style={[styles.actionBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                >
+                    <MapPin size={15} color={colors.primary} style={{ marginRight: 6 }} />
+                    <Text style={[styles.actionText, { color: colors.primary }]}>Select on map</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Auto-suggest Dropdown with Proximity Info */}
             {isFocused && results.length > 0 && (
                 <View style={[styles.dropdown, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                    <View style={[styles.dropdownHeader, { borderBottomColor: colors.border }]}>
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase' }}>
+                            {userCoords ? 'Nearby Suggestions' : 'Matching Locations'}
+                        </Text>
+                    </View>
                     <FlatList
                         data={results}
-                        keyExtractor={(item) => item.place_id.toString()}
+                        keyExtractor={(item) => String(item.place_id)}
                         keyboardShouldPersistTaps="handled"
                         renderItem={({ item }) => (
                             <TouchableOpacity 
                                 style={[styles.resultItem, { borderBottomColor: colors.border }]}
                                 onPress={() => handleSelectResult(item)}
                             >
-                                <MapPin size={16} color={colors.textSecondary} style={{ marginRight: 8, marginTop: 2 }} />
-                                <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
+                                <MapPin size={16} color={colors.textSecondary} style={{ marginRight: 10, marginTop: 3 }} />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={[styles.resultText, { color: colors.text }]} numberOfLines={2}>
+                                        {item.display_name}
+                                    </Text>
+                                    {item.distanceKm !== undefined && (
+                                        <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '600' }}>
+                                            📍 {item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)} m` : `${item.distanceKm.toFixed(1)} km`} away
+                                        </Text>
+                                    )}
+                                </View>
                             </TouchableOpacity>
                         )}
-                        style={{ maxHeight: 200 }}
+                        style={{ maxHeight: 220 }}
                     />
                 </View>
             )}
+
+            {/* Interactive Leaflet Map Modal for Web */}
+            <Modal visible={mapModalVisible} animationType="slide" transparent>
+                <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.65)' }]}>
+                    <View style={[styles.modalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                        {/* Modal Header */}
+                        <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                <MapPin size={20} color={colors.primary} />
+                                <Text style={[styles.modalTitle, { color: colors.text }]}>Choose Location on Map</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setMapModalVisible(false)} style={{ padding: 4 }}>
+                                <X size={22} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+
+                        {/* Interactive Web Map View via Leaflet iframe */}
+                        <View style={styles.mapFrameWrapper}>
+                            {React.createElement('iframe', {
+                                srcDoc: mapHtml,
+                                title: 'Location Map Picker',
+                                style: { width: '100%', height: '100%', border: 'none' },
+                            })}
+                        </View>
+
+                        {/* Selected Address Preview & Confirmation */}
+                        <View style={[styles.modalFooter, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
+                            <View style={{ flex: 1, marginRight: 12 }}>
+                                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>Selected Location:</Text>
+                                <Text style={{ fontSize: 14, color: colors.text, marginTop: 2 }} numberOfLines={2}>
+                                    {pinLoading ? 'Resolving address...' : (pinAddress || 'Move pin to choose address')}
+                                </Text>
+                            </View>
+
+                            <TouchableOpacity 
+                                onPress={confirmMapSelection} 
+                                style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
+                                disabled={pinLoading}
+                            >
+                                <Check size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                                <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 14 }}>Confirm Location</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -145,7 +409,7 @@ const styles = StyleSheet.create({
     inputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1,
+        borderWidth: 1.5,
         borderRadius: 12,
         height: 52,
         paddingHorizontal: 16,
@@ -156,31 +420,106 @@ const styles = StyleSheet.create({
     input: {
         flex: 1,
         height: '100%',
-        fontSize: 16,
+        fontSize: 15,
+        outlineStyle: 'none',
+    } as any,
+    actionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginTop: 8,
+        flexWrap: 'wrap',
+    },
+    actionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderRadius: 20,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
+    },
+    actionText: {
+        fontSize: 13,
+        fontWeight: '600',
     },
     dropdown: {
         position: 'absolute',
-        top: 80,
+        top: 86,
         left: 0,
         right: 0,
         borderWidth: 1,
         borderRadius: 12,
-        maxHeight: 200,
-        zIndex: 999,
-        elevation: 5,
+        maxHeight: 260,
+        zIndex: 9999,
+        elevation: 8,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.15,
+        shadowRadius: 10,
+    },
+    dropdownHeader: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
     },
     resultItem: {
         flexDirection: 'row',
+        alignItems: 'flex-start',
         padding: 12,
         borderBottomWidth: 1,
     },
     resultText: {
-        flex: 1,
         fontSize: 14,
         lineHeight: 20,
+    },
+    modalOverlay: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
+    },
+    modalCard: {
+        width: '100%',
+        maxWidth: 720,
+        height: '80%',
+        maxHeight: 600,
+        borderRadius: 16,
+        borderWidth: 1,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingHorizontal: 18,
+        paddingVertical: 14,
+        borderBottomWidth: 1,
+    },
+    modalTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+    },
+    mapFrameWrapper: {
+        flex: 1,
+        width: '100%',
+        minHeight: 350,
+        backgroundColor: '#e5e7eb',
+    },
+    modalFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 18,
+        paddingVertical: 14,
+        borderTopWidth: 1,
+    },
+    confirmBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 18,
+        paddingVertical: 11,
+        borderRadius: 10,
     },
 });
