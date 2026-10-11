@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Alert } from 'react-native';
-import { MapPin, X, Navigation, Search, Edit3 } from 'lucide-react-native';
+import { MapPin, X, Navigation, Search } from 'lucide-react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../contexts/ThemeContext';
 import Input from './Input';
 
@@ -33,7 +32,7 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): 
     return R * c;
 }
 
-export default function LocationPicker({ label, value, onChange, placeholder = "Search location within 5 km..." }: LocationPickerProps) {
+export default function LocationPicker({ label, value, onChange, placeholder = "Search location or choose on map..." }: LocationPickerProps) {
     const { colors } = useTheme();
     const [modalVisible, setModalVisible] = useState(false);
     
@@ -45,12 +44,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
     const [mapMode, setMapMode] = useState(false);
     
     // User GPS location for nearby biasing
-    const [userCoords, setUserCoords] = useState<{ lat: number, lon: number, name?: string } | null>(null);
-
-    // Manual city override state
-    const [cityModalVisible, setCityModalVisible] = useState(false);
-    const [cityInput, setCityInput] = useState('');
-    const [cityLoading, setCityLoading] = useState(false);
+    const [userCoords, setUserCoords] = useState<{ lat: number, lon: number } | null>(null);
 
     const [region, setRegion] = useState<Region>({
         latitude: 11.3992,
@@ -67,35 +61,21 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     }, [modalVisible, value]);
 
-    // Restore cached location and check current location
+    // Silently detect actual device GPS coordinates on mount
     useEffect(() => {
         (async () => {
             try {
-                const cached = await AsyncStorage.getItem('@findmate_user_coords');
-                if (cached) {
-                    const parsed = JSON.parse(cached);
-                    if (parsed?.lat && parsed?.lon) {
-                        setUserCoords(parsed);
-                        setRegion({
-                            latitude: parsed.lat,
-                            longitude: parsed.lon,
-                            latitudeDelta: 0.05,
-                            longitudeDelta: 0.05,
-                        });
-                        return;
-                    }
-                }
-
-                // Default anchor: Chidambaram
-                setUserCoords({ lat: 11.3992, lon: 79.6935, name: 'Chidambaram' });
-
                 const { status } = await Location.getForegroundPermissionsAsync();
                 if (status === 'granted') {
-                    const loc = await Location.getLastKnownPositionAsync() || await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+                    const loc = await Location.getLastKnownPositionAsync() || await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
                     if (loc) {
-                        const coords = { lat: loc.coords.latitude, lon: loc.coords.longitude };
-                        setUserCoords(coords);
-                        await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
+                        setUserCoords({ lat: loc.coords.latitude, lon: loc.coords.longitude });
+                        setRegion({
+                            latitude: loc.coords.latitude,
+                            longitude: loc.coords.longitude,
+                            latitudeDelta: 0.03,
+                            longitudeDelta: 0.03,
+                        });
                     }
                 }
             } catch {}
@@ -104,16 +84,29 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
     const reverseGeocode = async (lat: number, lon: number) => {
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=18&addressdetails=1`, {
                 headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
             });
             const data = await res.json();
-            return data.display_name || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            let formatted = data.display_name;
+            if (data.address) {
+                const addr = data.address;
+                const parts = [
+                    addr.road || addr.suburb || addr.village || addr.neighbourhood || addr.hamlet,
+                    addr.town || addr.city || addr.county,
+                    addr.state_district,
+                    addr.state,
+                    addr.postcode
+                ].filter(Boolean);
+                if (parts.length > 0) formatted = parts.join(', ');
+            }
+            return formatted || `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
         } catch (error) {
             return `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
         }
     };
 
+    // Search places nearby within 50 km radius
     const searchPlaces = async (text: string) => {
         setQuery(text);
         if (text.length < 2) {
@@ -129,42 +122,61 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
         try {
             let data: any[] = [];
-            const coords = userCoords || { lat: 11.3992, lon: 79.6935 };
+            const coords = userCoords;
 
-            // 5 km bounding box delta: 5km / 111km/deg ≈ 0.045 degrees
-            const delta = 0.045;
-            const minLon = coords.lon - delta;
-            const maxLat = coords.lat + delta;
-            const maxLon = coords.lon + delta;
-            const minLat = coords.lat - delta;
+            // 50 km bounding box delta: 50km / 111km/deg ≈ 0.45 degrees
+            if (coords) {
+                const delta = 0.45;
+                const minLon = coords.lon - delta;
+                const maxLat = coords.lat + delta;
+                const maxLon = coords.lon + delta;
+                const minLat = coords.lat - delta;
 
-            const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=10&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
-            const nearbyRes = await fetch(nearbyUrl, {
-                headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-            });
-            const nearbyData = await nearbyRes.json();
-            if (Array.isArray(nearbyData) && nearbyData.length > 0) {
-                data = nearbyData;
+                const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=15&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
+                const nearbyRes = await fetch(nearbyUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const nearbyData = await nearbyRes.json();
+                if (Array.isArray(nearbyData) && nearbyData.length > 0) {
+                    data = nearbyData;
+                }
+            }
+
+            // Fallback search if no nearby results within 50km or no GPS yet
+            if (data.length === 0) {
+                let fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=15&countrycodes=in`;
+                if (coords) {
+                    const delta = 1.0;
+                    fallbackUrl += `&viewbox=${coords.lon - delta},${coords.lat + delta},${coords.lon + delta},${coords.lat - delta}&bounded=0`;
+                }
+                const fallbackRes = await fetch(fallbackUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+                });
+                const fallbackData = await fallbackRes.json();
+                if (Array.isArray(fallbackData)) {
+                    data = fallbackData;
+                }
             }
 
             if (Array.isArray(data)) {
-                // Strict 5.0 km filter
-                let mapped: LocationResult[] = data
-                    .map((item: any) => {
-                        const itemLat = parseFloat(item.lat);
-                        const itemLon = parseFloat(item.lon);
-                        const dist = getDistanceKm(coords.lat, coords.lon, itemLat, itemLon);
-                        return {
-                            place_id: item.place_id,
-                            display_name: item.display_name,
-                            lat: item.lat,
-                            lon: item.lon,
-                            distanceKm: dist,
-                        };
-                    })
-                    .filter((item) => item.distanceKm <= 5.0); // STRICTLY 5 KM ONLY
+                let mapped: LocationResult[] = data.map((item: any) => {
+                    const itemLat = parseFloat(item.lat);
+                    const itemLon = parseFloat(item.lon);
+                    const dist = coords ? getDistanceKm(coords.lat, coords.lon, itemLat, itemLon) : undefined;
+                    return {
+                        place_id: item.place_id,
+                        display_name: item.display_name,
+                        lat: item.lat,
+                        lon: item.lon,
+                        distanceKm: dist,
+                    };
+                });
 
-                mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+                if (coords) {
+                    mapped = mapped.filter((item) => item.distanceKm === undefined || item.distanceKm <= 50.0);
+                    mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+                }
+
                 setResults(mapped);
             } else {
                 setResults([]);
@@ -176,27 +188,27 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         }
     };
 
+    // Exact GPS satellite lock
     const useCurrentLocation = async () => {
         setLoading(true);
         setLocatingInline(true);
         try {
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
-                Alert.alert('Permission Denied', 'Permission to access location was denied. Please turn on device GPS or use Set City.');
+                Alert.alert('Permission Denied', 'Please allow Location permission in phone settings to get your exact location.');
                 return;
             }
-            // Use Highest Accuracy for hardware GPS satellite lock on phones
+            // Use Highest Accuracy for hardware GPS satellites
             const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
             const coords = { lat: location.coords.latitude, lon: location.coords.longitude };
             setUserCoords(coords);
-            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
 
             const address = await reverseGeocode(location.coords.latitude, location.coords.longitude);
             
             onChange(address, { latitude: location.coords.latitude, longitude: location.coords.longitude });
             setModalVisible(false);
         } catch (error) {
-            Alert.alert('GPS Notice', 'Could not get exact GPS signal. You can tap "Set Town / City" or "Select on map" to choose your location.');
+            Alert.alert('GPS Notice', 'Could not get GPS satellite lock. Please ensure phone location is turned on.');
         } finally {
             setLoading(false);
             setLocatingInline(false);
@@ -207,12 +219,6 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         const lat = parseFloat(item.lat);
         const lon = parseFloat(item.lon);
         onChange(item.display_name, { latitude: lat, longitude: lon });
-        
-        setUserCoords({ lat, lon });
-        try {
-            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify({ lat, lon }));
-        } catch {}
-
         setModalVisible(false);
     };
 
@@ -221,42 +227,9 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         setLoading(true);
         const address = await reverseGeocode(markerCoord.latitude, markerCoord.longitude);
         onChange(address, { latitude: markerCoord.latitude, longitude: markerCoord.longitude });
-        
-        const coords = { lat: markerCoord.latitude, lon: markerCoord.longitude };
-        setUserCoords(coords);
-        try {
-            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
-        } catch {}
-
+        setUserCoords({ lat: markerCoord.latitude, lon: markerCoord.longitude });
         setLoading(false);
         setModalVisible(false);
-    };
-
-    const handleSetCity = async () => {
-        if (!cityInput.trim()) return;
-        setCityLoading(true);
-        try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityInput.trim() + ', Tamil Nadu, India')}&format=json&limit=1`, {
-                headers: { 'User-Agent': 'FindMyThingApp/1.0' }
-            });
-            const data = await res.json();
-            if (data && data.length > 0) {
-                const lat = parseFloat(data[0].lat);
-                const lon = parseFloat(data[0].lon);
-                const newCoords = { lat, lon, name: data[0].display_name.split(',')[0] };
-                setUserCoords(newCoords);
-                await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(newCoords));
-                setCityModalVisible(false);
-                setCityInput('');
-                Alert.alert('Location Updated', `Active area set to ${newCoords.name}. Place searches will now strictly look within 5 km.`);
-            } else {
-                Alert.alert('Not Found', 'Could not find that town/city.');
-            }
-        } catch {
-            Alert.alert('Error', 'Failed to update city. Please check internet.');
-        } finally {
-            setCityLoading(false);
-        }
     };
 
     const centerMapOnMe = async () => {
@@ -293,19 +266,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
     return (
         <View style={styles.wrapper}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                {label ? <Text style={[styles.label, { color: colors.text, marginBottom: 0 }]}>{label}</Text> : <View />}
-                <TouchableOpacity 
-                    onPress={() => setCityModalVisible(true)}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary + '18', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}
-                >
-                    <MapPin size={12} color={colors.primary} />
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary }}>
-                        Nearby: {userCoords?.name || 'Chidambaram'} (5km)
-                    </Text>
-                    <Edit3 size={11} color={colors.primary} style={{ marginLeft: 2 }} />
-                </TouchableOpacity>
-            </View>
+            {label ? <Text style={[styles.label, { color: colors.text }]}>{label}</Text> : null}
 
             {/* The Trigger Input */}
             <TouchableOpacity activeOpacity={0.8} onPress={() => { Keyboard.dismiss(); setMapMode(false); setModalVisible(true); }}>
@@ -319,7 +280,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 </View>
             </TouchableOpacity>
 
-            {/* Direct Quick Action Buttons Under the Field */}
+            {/* Direct Action Buttons Under the Field */}
             <View style={styles.inlineActionRow}>
                 <TouchableOpacity 
                     onPress={useCurrentLocation} 
@@ -332,7 +293,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                         <Navigation size={15} color={colors.primary} style={{ marginRight: 6 }} />
                     )}
                     <Text style={[styles.inlineActionText, { color: colors.primary }]}>
-                        {locatingInline ? 'Locating...' : 'Use my current location'}
+                        {locatingInline ? 'Acquiring GPS...' : 'Use my current location'}
                     </Text>
                 </TouchableOpacity>
 
@@ -343,43 +304,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     <MapPin size={15} color={colors.primary} style={{ marginRight: 6 }} />
                     <Text style={[styles.inlineActionText, { color: colors.primary }]}>Select on map</Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity 
-                    onPress={() => setCityModalVisible(true)} 
-                    style={[styles.inlineActionBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
-                >
-                    <Edit3 size={14} color={colors.primary} style={{ marginRight: 6 }} />
-                    <Text style={[styles.inlineActionText, { color: colors.primary }]}>Set Town / City</Text>
-                </TouchableOpacity>
             </View>
-
-            {/* Set Town Modal */}
-            <Modal visible={cityModalVisible} animationType="fade" transparent>
-                <View style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', padding: 20 }]}>
-                    <View style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: colors.border }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                            <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>Set Your City or Town</Text>
-                            <TouchableOpacity onPress={() => setCityModalVisible(false)}>
-                                <X size={20} color={colors.textSecondary} />
-                            </TouchableOpacity>
-                        </View>
-                        <TextInput
-                            style={{ height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 14, color: colors.text, backgroundColor: colors.background, marginBottom: 14 }}
-                            placeholder="Enter your town (e.g. Chidambaram)"
-                            placeholderTextColor={colors.textSecondary}
-                            value={cityInput}
-                            onChangeText={setCityInput}
-                        />
-                        <TouchableOpacity
-                            onPress={handleSetCity}
-                            disabled={cityLoading}
-                            style={[styles.confirmBtn, { backgroundColor: colors.primary, alignItems: 'center' }]}
-                        >
-                            {cityLoading ? <ActivityIndicator color="#FFF" /> : <Text style={{ color: '#FFF', fontWeight: '700' }}>Save Area</Text>}
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </Modal>
 
             {/* The Main Modal */}
             <Modal visible={modalVisible} animationType="slide" transparent>
@@ -390,7 +315,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     >
                         <View style={[styles.header, { borderBottomColor: colors.border }]}>
                             <Text style={[styles.title, { color: colors.text }]}>
-                                {mapMode ? 'Select on Map' : `Nearby (5 km of ${userCoords?.name || 'Chidambaram'})`}
+                                {mapMode ? 'Select on Map' : 'Search Location'}
                             </Text>
                             <TouchableOpacity onPress={() => setModalVisible(false)} style={{ padding: 4 }}>
                                 <X size={24} color={colors.textSecondary} />
@@ -436,7 +361,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                     <Search size={20} color={colors.textSecondary} style={{ marginRight: 8 }} />
                                     <TextInput
                                         style={[styles.searchInput, { color: colors.text }]}
-                                        placeholder="Search nearby places within 5 km..."
+                                        placeholder="Search nearby places (within 50 km)..."
                                         placeholderTextColor={colors.textSecondary}
                                         value={query}
                                         onChangeText={searchPlaces}
@@ -469,9 +394,11 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                                 <MapPin size={20} color={colors.primary} style={{ marginTop: 2, marginRight: 12 }} />
                                                 <View style={{ flex: 1 }}>
                                                     <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
-                                                    <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '700' }}>
-                                                        📍 {item.distanceKm! < 1 ? `${Math.round(item.distanceKm! * 1000)} meters` : `${item.distanceKm!.toFixed(1)} km`} away
-                                                    </Text>
+                                                    {item.distanceKm !== undefined && (
+                                                        <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '700' }}>
+                                                            📍 {item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)} m` : `${item.distanceKm.toFixed(1)} km`} away
+                                                        </Text>
+                                                    )}
                                                 </View>
                                             </TouchableOpacity>
                                         )}
@@ -480,7 +407,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                     query.length >= 2 && !loading ? (
                                         <View style={{ padding: 24, alignItems: 'center' }}>
                                             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                                                No places found within 5 km of {userCoords?.name || 'this area'}.
+                                                No places found matching "{query}" within 50 km.
                                             </Text>
                                         </View>
                                     ) : null
@@ -517,11 +444,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 1,
         borderRadius: 20,
-        paddingHorizontal: 11,
-        paddingVertical: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 7,
     },
     inlineActionText: {
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: '600',
     },
     overlay: {
