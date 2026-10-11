@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard } from 'react-native';
-import { MapPin, X, Navigation, Search } from 'lucide-react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Alert } from 'react-native';
+import { MapPin, X, Navigation, Search, Edit3 } from 'lucide-react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -33,7 +33,7 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): 
     return R * c;
 }
 
-export default function LocationPicker({ label, value, onChange, placeholder = "Search location..." }: LocationPickerProps) {
+export default function LocationPicker({ label, value, onChange, placeholder = "Search location within 5 km..." }: LocationPickerProps) {
     const { colors } = useTheme();
     const [modalVisible, setModalVisible] = useState(false);
     
@@ -45,7 +45,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
     const [mapMode, setMapMode] = useState(false);
     
     // User GPS location for nearby biasing
-    const [userCoords, setUserCoords] = useState<{ lat: number, lon: number } | null>(null);
+    const [userCoords, setUserCoords] = useState<{ lat: number, lon: number, name?: string } | null>(null);
+
+    // Manual city override state
+    const [cityModalVisible, setCityModalVisible] = useState(false);
+    const [cityInput, setCityInput] = useState('');
+    const [cityLoading, setCityLoading] = useState(false);
 
     const [region, setRegion] = useState<Region>({
         latitude: 11.3992,
@@ -77,8 +82,12 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                             latitudeDelta: 0.05,
                             longitudeDelta: 0.05,
                         });
+                        return;
                     }
                 }
+
+                // Default anchor: Chidambaram
+                setUserCoords({ lat: 11.3992, lon: 79.6935, name: 'Chidambaram' });
 
                 const { status } = await Location.getForegroundPermissionsAsync();
                 if (status === 'granted') {
@@ -120,59 +129,42 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
         try {
             let data: any[] = [];
+            const coords = userCoords || { lat: 11.3992, lon: 79.6935 };
 
-            // Tier 1: Search strictly within ~35km of current location (bounded=1)
-            if (userCoords) {
-                const minLon = userCoords.lon - 0.35;
-                const maxLat = userCoords.lat + 0.35;
-                const maxLon = userCoords.lon + 0.35;
-                const minLat = userCoords.lat - 0.35;
-                const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
-                const nearbyRes = await fetch(nearbyUrl, {
-                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                });
-                const nearbyData = await nearbyRes.json();
-                if (Array.isArray(nearbyData) && nearbyData.length > 0) {
-                    data = nearbyData;
-                }
+            // 5 km bounding box delta: 5km / 111km/deg ≈ 0.045 degrees
+            const delta = 0.045;
+            const minLon = coords.lon - delta;
+            const maxLat = coords.lat + delta;
+            const maxLon = coords.lon + delta;
+            const minLat = coords.lat - delta;
+
+            const nearbyUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=10&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
+            const nearbyRes = await fetch(nearbyUrl, {
+                headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+            });
+            const nearbyData = await nearbyRes.json();
+            if (Array.isArray(nearbyData) && nearbyData.length > 0) {
+                data = nearbyData;
             }
 
-            // Tier 2: Fallback to wider search if nothing found in strict radius
-            if (data.length === 0) {
-                let fallbackUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in`;
-                if (userCoords) {
-                    const minLon = userCoords.lon - 1.0;
-                    const maxLat = userCoords.lat + 1.0;
-                    const maxLon = userCoords.lon + 1.0;
-                    const minLat = userCoords.lat - 1.0;
-                    fallbackUrl += `&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=0`;
-                }
-                const fallbackRes = await fetch(fallbackUrl, {
-                    headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-                });
-                const fallbackData = await fallbackRes.json();
-                if (Array.isArray(fallbackData)) {
-                    data = fallbackData;
-                }
-            }
-            
             if (Array.isArray(data)) {
-                let mapped: LocationResult[] = data.map((item: any) => {
-                    const itemLat = parseFloat(item.lat);
-                    const itemLon = parseFloat(item.lon);
-                    const dist = userCoords ? getDistanceKm(userCoords.lat, userCoords.lon, itemLat, itemLon) : undefined;
-                    return {
-                        place_id: item.place_id,
-                        display_name: item.display_name,
-                        lat: item.lat,
-                        lon: item.lon,
-                        distanceKm: dist,
-                    };
-                });
+                // Strict 5.0 km filter
+                let mapped: LocationResult[] = data
+                    .map((item: any) => {
+                        const itemLat = parseFloat(item.lat);
+                        const itemLon = parseFloat(item.lon);
+                        const dist = getDistanceKm(coords.lat, coords.lon, itemLat, itemLon);
+                        return {
+                            place_id: item.place_id,
+                            display_name: item.display_name,
+                            lat: item.lat,
+                            lon: item.lon,
+                            distanceKm: dist,
+                        };
+                    })
+                    .filter((item) => item.distanceKm <= 5.0); // STRICTLY 5 KM ONLY
 
-                if (userCoords) {
-                    mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
-                }
+                mapped.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
                 setResults(mapped);
             } else {
                 setResults([]);
@@ -190,11 +182,11 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         try {
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status !== 'granted') {
-                alert('Permission to access location was denied');
+                Alert.alert('Permission Denied', 'Permission to access location was denied. Please turn on device GPS or use Set City.');
                 return;
             }
-            // Use High Accuracy for GPS satellite lock on phones
-            const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+            // Use Highest Accuracy for hardware GPS satellite lock on phones
+            const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
             const coords = { lat: location.coords.latitude, lon: location.coords.longitude };
             setUserCoords(coords);
             await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
@@ -204,7 +196,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
             onChange(address, { latitude: location.coords.latitude, longitude: location.coords.longitude });
             setModalVisible(false);
         } catch (error) {
-            alert('Failed to get current location. Please ensure device GPS is turned on.');
+            Alert.alert('GPS Notice', 'Could not get exact GPS signal. You can tap "Set Town / City" or "Select on map" to choose your location.');
         } finally {
             setLoading(false);
             setLocatingInline(false);
@@ -216,7 +208,6 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         const lon = parseFloat(item.lon);
         onChange(item.display_name, { latitude: lat, longitude: lon });
         
-        // Cache selected coords for future proximity searches
         setUserCoords({ lat, lon });
         try {
             await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify({ lat, lon }));
@@ -231,13 +222,41 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         const address = await reverseGeocode(markerCoord.latitude, markerCoord.longitude);
         onChange(address, { latitude: markerCoord.latitude, longitude: markerCoord.longitude });
         
-        setUserCoords({ lat: markerCoord.latitude, lon: markerCoord.longitude });
+        const coords = { lat: markerCoord.latitude, lon: markerCoord.longitude };
+        setUserCoords(coords);
         try {
-            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify({ lat: markerCoord.latitude, lon: markerCoord.longitude }));
+            await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(coords));
         } catch {}
 
         setLoading(false);
         setModalVisible(false);
+    };
+
+    const handleSetCity = async () => {
+        if (!cityInput.trim()) return;
+        setCityLoading(true);
+        try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityInput.trim() + ', Tamil Nadu, India')}&format=json&limit=1`, {
+                headers: { 'User-Agent': 'FindMyThingApp/1.0' }
+            });
+            const data = await res.json();
+            if (data && data.length > 0) {
+                const lat = parseFloat(data[0].lat);
+                const lon = parseFloat(data[0].lon);
+                const newCoords = { lat, lon, name: data[0].display_name.split(',')[0] };
+                setUserCoords(newCoords);
+                await AsyncStorage.setItem('@findmate_user_coords', JSON.stringify(newCoords));
+                setCityModalVisible(false);
+                setCityInput('');
+                Alert.alert('Location Updated', `Active area set to ${newCoords.name}. Place searches will now strictly look within 5 km.`);
+            } else {
+                Alert.alert('Not Found', 'Could not find that town/city.');
+            }
+        } catch {
+            Alert.alert('Error', 'Failed to update city. Please check internet.');
+        } finally {
+            setCityLoading(false);
+        }
     };
 
     const centerMapOnMe = async () => {
@@ -245,14 +264,14 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
             setLoading(true);
             const { status } = await Location.requestForegroundPermissionsAsync();
             if (status === 'granted') {
-                const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+                const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
                 const coords = { lat: location.coords.latitude, lon: location.coords.longitude };
                 setUserCoords(coords);
                 setRegion({
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,
-                    latitudeDelta: 0.015,
-                    longitudeDelta: 0.015
+                    latitudeDelta: 0.02,
+                    longitudeDelta: 0.02
                 });
                 setMarkerCoord({
                     latitude: location.coords.latitude,
@@ -274,11 +293,24 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
     return (
         <View style={styles.wrapper}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                {label ? <Text style={[styles.label, { color: colors.text, marginBottom: 0 }]}>{label}</Text> : <View />}
+                <TouchableOpacity 
+                    onPress={() => setCityModalVisible(true)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary + '18', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}
+                >
+                    <MapPin size={12} color={colors.primary} />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.primary }}>
+                        Nearby: {userCoords?.name || 'Chidambaram'} (5km)
+                    </Text>
+                    <Edit3 size={11} color={colors.primary} style={{ marginLeft: 2 }} />
+                </TouchableOpacity>
+            </View>
+
             {/* The Trigger Input */}
             <TouchableOpacity activeOpacity={0.8} onPress={() => { Keyboard.dismiss(); setMapMode(false); setModalVisible(true); }}>
                 <View pointerEvents="none">
                     <Input
-                        label={label}
                         placeholder={placeholder}
                         value={value}
                         editable={false}
@@ -311,9 +343,45 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     <MapPin size={15} color={colors.primary} style={{ marginRight: 6 }} />
                     <Text style={[styles.inlineActionText, { color: colors.primary }]}>Select on map</Text>
                 </TouchableOpacity>
+
+                <TouchableOpacity 
+                    onPress={() => setCityModalVisible(true)} 
+                    style={[styles.inlineActionBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                >
+                    <Edit3 size={14} color={colors.primary} style={{ marginRight: 6 }} />
+                    <Text style={[styles.inlineActionText, { color: colors.primary }]}>Set Town / City</Text>
+                </TouchableOpacity>
             </View>
 
-            {/* The Modal */}
+            {/* Set Town Modal */}
+            <Modal visible={cityModalVisible} animationType="fade" transparent>
+                <View style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'center', padding: 20 }]}>
+                    <View style={{ backgroundColor: colors.surface, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: colors.border }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <Text style={{ fontSize: 17, fontWeight: '700', color: colors.text }}>Set Your City or Town</Text>
+                            <TouchableOpacity onPress={() => setCityModalVisible(false)}>
+                                <X size={20} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        </View>
+                        <TextInput
+                            style={{ height: 48, borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 14, color: colors.text, backgroundColor: colors.background, marginBottom: 14 }}
+                            placeholder="Enter your town (e.g. Chidambaram)"
+                            placeholderTextColor={colors.textSecondary}
+                            value={cityInput}
+                            onChangeText={setCityInput}
+                        />
+                        <TouchableOpacity
+                            onPress={handleSetCity}
+                            disabled={cityLoading}
+                            style={[styles.confirmBtn, { backgroundColor: colors.primary, alignItems: 'center' }]}
+                        >
+                            {cityLoading ? <ActivityIndicator color="#FFF" /> : <Text style={{ color: '#FFF', fontWeight: '700' }}>Save Area</Text>}
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* The Main Modal */}
             <Modal visible={modalVisible} animationType="slide" transparent>
                 <View style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
                     <KeyboardAvoidingView 
@@ -322,7 +390,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                     >
                         <View style={[styles.header, { borderBottomColor: colors.border }]}>
                             <Text style={[styles.title, { color: colors.text }]}>
-                                {mapMode ? 'Select on Map' : 'Search Location'}
+                                {mapMode ? 'Select on Map' : `Nearby (5 km of ${userCoords?.name || 'Chidambaram'})`}
                             </Text>
                             <TouchableOpacity onPress={() => setModalVisible(false)} style={{ padding: 4 }}>
                                 <X size={24} color={colors.textSecondary} />
@@ -368,7 +436,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                     <Search size={20} color={colors.textSecondary} style={{ marginRight: 8 }} />
                                     <TextInput
                                         style={[styles.searchInput, { color: colors.text }]}
-                                        placeholder="Search nearby places, landmarks..."
+                                        placeholder="Search nearby places within 5 km..."
                                         placeholderTextColor={colors.textSecondary}
                                         value={query}
                                         onChangeText={searchPlaces}
@@ -379,49 +447,44 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
 
                                 <View style={styles.actionRow}>
                                     <TouchableOpacity style={styles.actionBtn} onPress={useCurrentLocation}>
-                                        <Navigation size={18} color={colors.primary} />
-                                        <Text style={[styles.actionText, { color: colors.primary }]}>Use my current location</Text>
+                                        <Navigation size={16} color={colors.primary} />
+                                        <Text style={[styles.actionText, { color: colors.primary }]}>Use GPS location</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity style={styles.actionBtn} onPress={() => { setMapMode(true); centerMapOnMe(); }}>
-                                        <MapPin size={18} color={colors.primary} />
+                                        <MapPin size={16} color={colors.primary} />
                                         <Text style={[styles.actionText, { color: colors.primary }]}>Choose on map</Text>
                                     </TouchableOpacity>
                                 </View>
 
-                                {userCoords && results.length > 0 && (
-                                    <View style={{ paddingHorizontal: 16, paddingVertical: 6, backgroundColor: colors.background }}>
-                                        <Text style={{ fontSize: 11, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase' }}>
-                                            Nearby Locations
-                                        </Text>
-                                    </View>
-                                )}
-
-                                <FlatList
-                                    data={results}
-                                    keyExtractor={(item) => String(item.place_id)}
-                                    keyboardShouldPersistTaps="handled"
-                                    renderItem={({ item }) => (
-                                        <TouchableOpacity 
-                                            style={[styles.resultItem, { borderBottomColor: colors.border }]}
-                                            onPress={() => handleSelectResult(item)}
-                                        >
-                                            <MapPin size={20} color={colors.textSecondary} style={{ marginTop: 2, marginRight: 12 }} />
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
-                                                {item.distanceKm !== undefined && (
-                                                    <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '600' }}>
-                                                        📍 {item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)} m` : `${item.distanceKm.toFixed(1)} km`} away
+                                {results.length > 0 ? (
+                                    <FlatList
+                                        data={results}
+                                        keyExtractor={(item) => String(item.place_id)}
+                                        keyboardShouldPersistTaps="handled"
+                                        renderItem={({ item }) => (
+                                            <TouchableOpacity 
+                                                style={[styles.resultItem, { borderBottomColor: colors.border }]}
+                                                onPress={() => handleSelectResult(item)}
+                                            >
+                                                <MapPin size={20} color={colors.primary} style={{ marginTop: 2, marginRight: 12 }} />
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
+                                                    <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '700' }}>
+                                                        📍 {item.distanceKm! < 1 ? `${Math.round(item.distanceKm! * 1000)} meters` : `${item.distanceKm!.toFixed(1)} km`} away
                                                     </Text>
-                                                )}
-                                            </View>
-                                        </TouchableOpacity>
-                                    )}
-                                    ListEmptyComponent={() => (
-                                        !loading && query.length > 2 ? (
-                                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No places found</Text>
-                                        ) : null
-                                    )}
-                                />
+                                                </View>
+                                            </TouchableOpacity>
+                                        )}
+                                    />
+                                ) : (
+                                    query.length >= 2 && !loading ? (
+                                        <View style={{ padding: 24, alignItems: 'center' }}>
+                                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                                No places found within 5 km of {userCoords?.name || 'this area'}.
+                                            </Text>
+                                        </View>
+                                    ) : null
+                                )}
                             </View>
                         )}
                     </KeyboardAvoidingView>
@@ -436,10 +499,15 @@ const styles = StyleSheet.create({
         width: '100%',
         marginBottom: 8,
     },
+    label: {
+        fontSize: 14,
+        fontWeight: '600',
+        marginBottom: 6,
+    },
     inlineActionRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: 8,
         marginTop: 6,
         marginBottom: 10,
         flexWrap: 'wrap',
@@ -449,11 +517,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 1,
         borderRadius: 20,
-        paddingHorizontal: 12,
-        paddingVertical: 7,
+        paddingHorizontal: 11,
+        paddingVertical: 6,
     },
     inlineActionText: {
-        fontSize: 13,
+        fontSize: 12,
         fontWeight: '600',
     },
     overlay: {
@@ -479,7 +547,7 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
     },
     title: {
-        fontSize: 18,
+        fontSize: 17,
         fontWeight: 'bold',
     },
     searchContainer: {
@@ -509,11 +577,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 12,
+        paddingVertical: 10,
     },
     actionText: {
         marginLeft: 8,
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '600',
     },
     resultItem: {
@@ -528,8 +596,8 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         textAlign: 'center',
-        marginTop: 40,
-        fontSize: 16,
+        fontSize: 14,
+        lineHeight: 20,
     },
     mapContainer: {
         flex: 1,
@@ -565,7 +633,7 @@ const styles = StyleSheet.create({
         padding: 8,
     },
     confirmBtn: {
-        paddingHorizontal: 24,
+        paddingHorizontal: 20,
         paddingVertical: 12,
         borderRadius: 8,
         minWidth: 120,
