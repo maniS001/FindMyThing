@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "description": "FindMyThing Backend API",
   "main": "dist/index.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "build": "tsc",
     "start": "npx prisma db push --accept-data-loss && node dist/index.js",
     "postinstall": "prisma generate",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",

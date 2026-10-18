@@ -1,7 +1,7 @@
 {
-  "name": "zonal-planck",
+  "name": "findmything",
   "main": "expo-router/entry",
-  "version": "1.0.0",
+  "version": "1.0.0-beta.1",
   "scripts": {
     "vercel-build": "npx expo export -p web",
     "start": "expo start",

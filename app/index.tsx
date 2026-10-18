@@ -32,7 +32,12 @@ export default function LandingScreen() {
                 showsVerticalScrollIndicator={false}
             >
                 <View style={styles.header}>
-                    <Text style={[styles.title, { color: colors.text }]}>FindMyThing</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                        <Text style={[styles.title, { color: colors.text }]}>FindMyThing</Text>
+                        <View style={{ backgroundColor: colors.primary + '20', borderColor: colors.primary, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 12 }}>
+                            <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>BETA</Text>
+                        </View>
+                    </View>
                     <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
                         Reconnecting people with their belongings.
                     </Text>

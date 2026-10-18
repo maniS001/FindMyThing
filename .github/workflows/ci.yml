@@ -1,0 +1,120 @@
+name: FindMyThing CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch: # Allows manual trigger with 1-click in GitHub Actions UI
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================
+  # Job 1: Frontend Typecheck & Automated Tests
+  # ==========================================
+  frontend-tests:
+    name: Frontend Tests & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: TypeScript Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run Jest Test Suite (Location, Verification, & Store)
+        run: npx jest --ci --maxWorkers=2
+
+  # ==========================================
+  # Job 2: Frontend Production Web Export Build
+  # ==========================================
+  frontend-web-build:
+    name: Frontend Production Web Build (Vercel)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Web Production Export
+        run: npx expo export -p web
+
+  # ==========================================
+  # Job 3: Backend API, Prisma & TypeScript Build
+  # ==========================================
+  backend-tests:
+    name: Backend API & Prisma Validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        run: npm ci
+
+      - name: Validate Prisma Schema
+        run: npx prisma validate
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Compile Backend TypeScript
+        run: npm run build
+
+      - name: Run Backend Typecheck
+        run: npm test
+
+  # ==========================================
+  # Job 4: Security & Vulnerability Audit
+  # ==========================================
+  security-audit:
+    name: Security Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Security Audit (Frontend)
+        run: npm audit --audit-level=critical || true
+
+      - name: Run Security Audit (Backend)
+        working-directory: backend
+        run: npm audit --audit-level=critical || true

@@ -1,0 +1,28 @@
+{
+  "name": "FindMyThing Codespace",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-20-bullseye",
+  "forwardPorts": [8081, 5000],
+  "portsAttributes": {
+    "8081": {
+      "label": "Expo Web / Metro Bundler",
+      "onAutoForward": "openBrowser"
+    },
+    "5000": {
+      "label": "Backend API Server",
+      "onAutoForward": "silent"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "Prisma.prisma",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "postCreateCommand": "npm install && cd backend && npm install && npx prisma generate"
+}

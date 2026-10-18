@@ -21,7 +21,7 @@ export default function AboutScreen() {
             <ScrollView contentContainerStyle={styles.content}>
                 <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <Text style={[styles.cardTitle, { color: colors.text }]}>FindMyThing</Text>
-                    <Text style={[styles.version, { color: colors.textSecondary }]}>Version 1.0.0</Text>
+                    <Text style={[styles.version, { color: colors.textSecondary }]}>Version 1.0.0 (Beta)</Text>
 
                     <Text style={[styles.description, { color: colors.text }]}>
                         FindMyThing helps reconnect people with their lost belongings.
