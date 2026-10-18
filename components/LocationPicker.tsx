@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Modal, ActivityIndicator, KeyboardAvoidingView, Platform, Keyboard, Alert } from 'react-native';
-import { MapPin, X, Navigation, Search } from 'lucide-react-native';
+import { MapPin, X, Navigation, Search, CornerDownLeft } from 'lucide-react-native';
 import MapView, { Marker, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useTheme } from '../contexts/ThemeContext';
@@ -12,6 +12,7 @@ interface LocationResult {
     lat: string;
     lon: string;
     distanceKm?: number;
+    isCustom?: boolean;
 }
 
 interface LocationPickerProps {
@@ -32,37 +33,56 @@ function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): 
     return R * c;
 }
 
-// Resilient multi-engine reverse geocoder (BigDataCloud -> Nominatim -> Photon -> Coords)
+// Resilient multi-engine reverse geocoder: Nominatim zoom=18 first
 async function fetchAddressForCoords(lat: number, lon: number): Promise<string> {
-    // Engine 1: BigDataCloud (fast, zero rate limits)
+    // Engine 1: OpenStreetMap Nominatim with full landmark/street breakdown
     try {
-        const bdcRes = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`);
+        const nomRes = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=18&addressdetails=1`,
+            {
+                headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
+            }
+        );
+        if (nomRes.ok) {
+            const data = await nomRes.json();
+            if (data && data.address) {
+                const a = data.address;
+                const landmark = data.name || a.amenity || a.leisure || a.tourism || a.building || a.shop || a.office || a.historic || a.place || '';
+                const road = a.road || a.pedestrian || a.street || '';
+                const subLocality = a.suburb || a.village || a.neighbourhood || a.hamlet || '';
+                const town = a.town || a.city || a.county || a.municipality || '';
+                const district = a.state_district || a.district || '';
+                const postcode = a.postcode || '';
+
+                const parts = [landmark, road, subLocality, town, district, postcode].filter(Boolean);
+                const uniqueParts: string[] = [];
+                for (const p of parts) {
+                    if (!uniqueParts.includes(p)) uniqueParts.push(p);
+                }
+                if (uniqueParts.length >= 2) {
+                    return uniqueParts.join(', ');
+                }
+                if (data.display_name) return data.display_name;
+            }
+        }
+    } catch {}
+
+    // Engine 2: BigDataCloud fallback
+    try {
+        const bdcRes = await fetch(
+            `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`
+        );
         if (bdcRes.ok) {
             const bdc = await bdcRes.json();
             const locality = bdc.locality || bdc.city || '';
-            const district = bdc.localityInfo?.administrative?.find((a: any) => a.order >= 8 && a.order <= 11)?.name || '';
+            const district = bdc.localityInfo?.administrative?.find((a: any) => a.order >= 9 && a.order <= 11)?.name || '';
             const state = bdc.principalSubdivision || '';
             const parts = [locality, district !== locality ? district : '', state].filter(Boolean);
-            if (parts.length > 0) {
-                return parts.join(', ');
-            }
+            if (parts.length > 0) return parts.join(', ');
         }
     } catch {}
 
-    // Engine 2: OpenStreetMap Nominatim
-    try {
-        const nomRes = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=16&addressdetails=1`, {
-            headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' }
-        });
-        if (nomRes.ok) {
-            const nom = await nomRes.json();
-            if (nom && nom.display_name && !nom.error) {
-                return nom.display_name;
-            }
-        }
-    } catch {}
-
-    // Engine 3: Photon reverse
+    // Engine 3: Photon fallback
     try {
         const photonRes = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`);
         if (photonRes.ok) {
@@ -78,7 +98,7 @@ async function fetchAddressForCoords(lat: number, lon: number): Promise<string> 
     return `Location (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
 }
 
-export default function LocationPicker({ label, value, onChange, placeholder = "Search location or choose on map..." }: LocationPickerProps) {
+export default function LocationPicker({ label, value, onChange, placeholder = "Search location or enter your own..." }: LocationPickerProps) {
     const { colors } = useTheme();
     const [modalVisible, setModalVisible] = useState(false);
     
@@ -128,27 +148,43 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
         })();
     }, []);
 
-    // Search places nearby within 50 km radius, strictly sorted by closest distance
+    // Search places nearby, always including the user's custom entered text
     const searchPlaces = async (text: string) => {
         setQuery(text);
-        if (text.length < 2) {
+
+        // Directly allow typing without forcing selection
+        onChange(text, userCoords ? { latitude: userCoords.lat, longitude: userCoords.lon } : undefined);
+
+        const trimmed = text.trim();
+        if (trimmed.length < 2) {
             setResults([]);
             return;
         }
+
         setLoading(true);
 
-        const cleanQuery = text
+        const cleanQuery = trimmed
             .replace(/busstand/gi, 'bus stand')
             .replace(/railwaystation/gi, 'railway station')
             .replace(/policestation/gi, 'police station');
 
         try {
             const coords = userCoords;
-            let combined: LocationResult[] = [];
+            const combined: LocationResult[] = [];
 
-            // Query Engine 1: Photon with GPS proximity bias
+            // 1. ALWAYS ADD USER'S EXACT ENTERED TEXT AS THE FIRST OPTION
+            combined.push({
+                place_id: 'custom-user-input',
+                display_name: trimmed,
+                isCustom: true,
+                lat: String(coords?.lat || 11.3992),
+                lon: String(coords?.lon || 79.6935),
+                distanceKm: coords ? 0 : undefined,
+            });
+
+            // 2. Query Engine 1: Photon with GPS proximity bias
             try {
-                let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQuery)}&limit=15`;
+                let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQuery)}&limit=12`;
                 if (coords) {
                     photonUrl += `&lat=${coords.lat}&lon=${coords.lon}`;
                 }
@@ -166,7 +202,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                         const dist = coords ? getDistanceKm(coords.lat, coords.lon, itemLat, itemLon) : undefined;
                         const name = p.name || p.street || cleanQuery;
                         const placeDetails = [name, p.city || p.district || p.state].filter(Boolean).join(', ');
-                        
+
                         combined.push({
                             place_id: `photon-${itemLat}-${itemLon}`,
                             display_name: placeDetails,
@@ -178,54 +214,68 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                 }
             } catch {}
 
-            // Query Engine 2: OpenStreetMap Nominatim with viewbox if Photon had few results
-            if (combined.length < 5 && coords) {
-                try {
-                    const delta = 0.45; // ~50 km
-                    const minLon = coords.lon - delta;
-                    const maxLat = coords.lat + delta;
-                    const maxLon = coords.lon + delta;
-                    const minLat = coords.lat - delta;
-                    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=10&countrycodes=in&viewbox=${minLon},${maxLat},${maxLon},${minLat}&bounded=1`;
-                    const nomRes = await fetch(nomUrl, {
-                        headers: { 'User-Agent': 'FindMyThingApp/1.0' }
-                    });
-                    if (nomRes.ok) {
-                        const nomData = await nomRes.json();
-                        if (Array.isArray(nomData)) {
-                            for (const item of nomData) {
-                                const itemLat = parseFloat(item.lat);
-                                const itemLon = parseFloat(item.lon);
-                                const dist = getDistanceKm(coords.lat, coords.lon, itemLat, itemLon);
-                                combined.push({
-                                    place_id: item.place_id,
-                                    display_name: item.display_name,
-                                    lat: item.lat,
-                                    lon: item.lon,
-                                    distanceKm: dist,
-                                });
-                            }
+            // 3. Query Engine 2: OpenStreetMap Nominatim
+            try {
+                let nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanQuery)}&format=json&limit=8&countrycodes=in`;
+                if (coords) {
+                    const delta = 0.5; // ~55 km
+                    nomUrl += `&viewbox=${coords.lon - delta},${coords.lat + delta},${coords.lon + delta},${coords.lat - delta}`;
+                }
+                const nomRes = await fetch(nomUrl, {
+                    headers: { 'User-Agent': 'FindMyThingApp/1.0' }
+                });
+                if (nomRes.ok) {
+                    const nomData = await nomRes.json();
+                    if (Array.isArray(nomData)) {
+                        for (const item of nomData) {
+                            const itemLat = parseFloat(item.lat);
+                            const itemLon = parseFloat(item.lon);
+                            const dist = coords ? getDistanceKm(coords.lat, coords.lon, itemLat, itemLon) : undefined;
+                            combined.push({
+                                place_id: item.place_id,
+                                display_name: item.display_name,
+                                lat: item.lat,
+                                lon: item.lon,
+                                distanceKm: dist,
+                            });
                         }
                     }
-                } catch {}
-            }
+                }
+            } catch {}
 
             // Deduplicate
             const seen = new Set<string>();
-            let filtered = combined.filter((item) => {
+            const deduplicated: LocationResult[] = [];
+            for (const item of combined) {
+                if (item.isCustom) {
+                    deduplicated.push(item);
+                    continue;
+                }
                 const key = `${parseFloat(item.lat).toFixed(3)}_${parseFloat(item.lon).toFixed(3)}`;
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-            });
-
-            // Filter to 50 km and STRICTLY sort closest distance first
-            if (coords) {
-                filtered = filtered.filter((item) => item.distanceKm === undefined || item.distanceKm <= 50.0);
-                filtered.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    deduplicated.push(item);
+                }
             }
 
-            setResults(filtered);
+            // Sort non-custom items by proximity to user
+            const customItem = deduplicated.find((i) => i.isCustom);
+            let otherItems = deduplicated.filter((i) => !i.isCustom);
+            if (coords) {
+                // If user has GPS coords, only keep results within 60 km, unless user specifically searched for that distant city/state
+                otherItems = otherItems.filter((i) => {
+                    if (i.distanceKm !== undefined && i.distanceKm > 60) {
+                        const qLower = cleanQuery.toLowerCase();
+                        const dLower = i.display_name.toLowerCase();
+                        const words = qLower.split(/\s+/).filter(w => w.length > 3);
+                        return words.some(w => dLower.includes(w) && !['park', 'road', 'street', 'station', 'stand', 'nagar', 'cross', 'near', 'main'].includes(w));
+                    }
+                    return true;
+                });
+                otherItems.sort((a, b) => (a.distanceKm ?? 9999) - (b.distanceKm ?? 9999));
+            }
+
+            setResults(customItem ? [customItem, ...otherItems] : otherItems);
         } catch (error) {
             console.error('Search error', error);
         } finally {
@@ -406,7 +456,7 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                     <Search size={20} color={colors.textSecondary} style={{ marginRight: 8 }} />
                                     <TextInput
                                         style={[styles.searchInput, { color: colors.text }]}
-                                        placeholder="Search nearby places (within 50 km)..."
+                                        placeholder="Search landmark or type address..."
                                         placeholderTextColor={colors.textSecondary}
                                         value={query}
                                         onChangeText={searchPlaces}
@@ -431,29 +481,64 @@ export default function LocationPicker({ label, value, onChange, placeholder = "
                                         data={results}
                                         keyExtractor={(item) => String(item.place_id)}
                                         keyboardShouldPersistTaps="handled"
-                                        renderItem={({ item }) => (
-                                            <TouchableOpacity 
-                                                style={[styles.resultItem, { borderBottomColor: colors.border }]}
-                                                onPress={() => handleSelectResult(item)}
-                                            >
-                                                <MapPin size={20} color={colors.primary} style={{ marginTop: 2, marginRight: 12 }} />
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
-                                                    {item.distanceKm !== undefined && (
-                                                        <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '700' }}>
-                                                            📍 {item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)} m` : `${item.distanceKm.toFixed(1)} km`} away
-                                                        </Text>
-                                                    )}
-                                                </View>
-                                            </TouchableOpacity>
-                                        )}
+                                        renderItem={({ item }) => {
+                                            if (item.isCustom) {
+                                                return (
+                                                    <TouchableOpacity 
+                                                        style={[styles.customResultItem, { backgroundColor: colors.primary + '15', borderBottomColor: colors.border }]}
+                                                        onPress={() => handleSelectResult(item)}
+                                                    >
+                                                        <CornerDownLeft size={16} color={colors.primary} style={{ marginRight: 10, marginTop: 2 }} />
+                                                        <View style={{ flex: 1 }}>
+                                                            <Text style={[styles.resultText, { color: colors.primary, fontWeight: '700' }]}>
+                                                                Use "{item.display_name}"
+                                                            </Text>
+                                                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 1 }}>
+                                                                Set custom place name directly
+                                                            </Text>
+                                                        </View>
+                                                    </TouchableOpacity>
+                                                );
+                                            }
+
+                                            return (
+                                                <TouchableOpacity 
+                                                    style={[styles.resultItem, { borderBottomColor: colors.border }]}
+                                                    onPress={() => handleSelectResult(item)}
+                                                >
+                                                    <MapPin size={20} color={colors.primary} style={{ marginTop: 2, marginRight: 12 }} />
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={[styles.resultText, { color: colors.text }]}>{item.display_name}</Text>
+                                                        {item.distanceKm !== undefined && item.distanceKm > 0 && (
+                                                            <Text style={{ fontSize: 12, color: colors.primary, marginTop: 2, fontWeight: '700' }}>
+                                                                📍 {item.distanceKm < 1 ? `${Math.round(item.distanceKm * 1000)} m` : `${item.distanceKm.toFixed(1)} km`} away
+                                                            </Text>
+                                                        )}
+                                                    </View>
+                                                </TouchableOpacity>
+                                            );
+                                        }}
                                     />
                                 ) : (
-                                    query.length >= 2 && !loading ? (
-                                        <View style={{ padding: 24, alignItems: 'center' }}>
-                                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                                                No places found matching "{query}" within 50 km.
-                                            </Text>
+                                    query.trim().length >= 2 && !loading ? (
+                                        <View style={{ padding: 16 }}>
+                                            <TouchableOpacity 
+                                                style={[styles.customResultItem, { backgroundColor: colors.primary + '15', borderRadius: 8, padding: 12 }]}
+                                                onPress={() => {
+                                                    onChange(query.trim(), userCoords ? { latitude: userCoords.lat, longitude: userCoords.lon } : undefined);
+                                                    setModalVisible(false);
+                                                }}
+                                            >
+                                                <CornerDownLeft size={16} color={colors.primary} style={{ marginRight: 10, marginTop: 2 }} />
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={[styles.resultText, { color: colors.primary, fontWeight: '700' }]}>
+                                                        Use "{query.trim()}"
+                                                    </Text>
+                                                    <Text style={{ fontSize: 11, color: colors.textSecondary, marginTop: 1 }}>
+                                                        Tap to save what you entered
+                                                    </Text>
+                                                </View>
+                                            </TouchableOpacity>
                                         </View>
                                     ) : null
                                 )}
@@ -556,6 +641,12 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '600',
     },
+    customResultItem: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        padding: 14,
+        borderBottomWidth: 1,
+    },
     resultItem: {
         flexDirection: 'row',
         alignItems: 'flex-start',
@@ -563,11 +654,6 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
     },
     resultText: {
-        fontSize: 14,
-        lineHeight: 20,
-    },
-    emptyText: {
-        textAlign: 'center',
         fontSize: 14,
         lineHeight: 20,
     },
