@@ -4,6 +4,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export type WSMessageType =
     | 'AUTH'
     | 'AUTH_OK'
+    | 'PING'
+    | 'PONG'
     | 'CHAT_MESSAGE'
     | 'CALL_OFFER'
     | 'CALL_ANSWER'
@@ -33,13 +35,32 @@ class ChatService {
     private ws: WebSocket | null = null;
     private listeners: Map<string, MessageHandler[]> = new Map();
     private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    private pingTimer: ReturnType<typeof setInterval> | null = null;
     private isConnected = false;
     private pendingQueue: WSPayload[] = [];
+    private initializedListeners = false;
+
+    constructor() {
+        // Auto-reconnect when user returns to tab / unlocks phone
+        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
+                    console.log('[ChatService] App visible again. Re-verifying WebSocket connection...');
+                    this.connect();
+                }
+            });
+            window.addEventListener('online', () => {
+                console.log('[ChatService] Network back online. Reconnecting WebSocket...');
+                this.connect();
+            });
+        }
+    }
 
     connect = async () => {
         try {
             const token = await AsyncStorage.getItem('token');
-            if (!token || this.ws?.readyState === WebSocket.OPEN) return;
+            if (!token) return;
+            if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) return;
 
             this.ws = new WebSocket(WS_URL);
 
@@ -52,11 +73,20 @@ class ChatService {
                 this.pendingQueue.forEach(m => this.rawSend(m));
                 this.pendingQueue = [];
                 console.log('[ChatService] WebSocket connected');
+
+                // Start 20s heartbeat to keep connection alive through Render/proxies
+                if (this.pingTimer) clearInterval(this.pingTimer);
+                this.pingTimer = setInterval(() => {
+                    if (this.ws?.readyState === WebSocket.OPEN) {
+                        this.rawSend({ type: 'PING' });
+                    }
+                }, 20000);
             };
 
             this.ws.onmessage = (e) => {
                 try {
                     const payload: WSPayload = JSON.parse(e.data);
+                    if (payload.type === 'PONG') return;
                     this.dispatch(payload.type, payload);
                 } catch (err) {
                     console.error('[ChatService] parse error', err);
@@ -65,7 +95,9 @@ class ChatService {
 
             this.ws.onclose = () => {
                 this.isConnected = false;
+                if (this.pingTimer) clearInterval(this.pingTimer);
                 console.log('[ChatService] WebSocket closed. Reconnecting in 3s...');
+                if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = setTimeout(() => this.connect(), 3000);
             };
 
@@ -79,6 +111,7 @@ class ChatService {
 
     disconnect = () => {
         if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        if (this.pingTimer) clearInterval(this.pingTimer);
         this.ws?.close();
         this.ws = null;
         this.isConnected = false;

@@ -15,6 +15,8 @@ import { registerForPushNotificationsAsync } from '../utils/pushNotifications';
 import * as Location from 'expo-location';
 import chatService from '../services/chatService';
 import IncomingCallModal from '../components/IncomingCallModal';
+import ActiveCallBanner from '../components/ActiveCallBanner';
+import { CallProvider } from '../contexts/CallContext';
 
 // Configure notification handler
 Notifications.setNotificationHandler({
@@ -161,6 +163,7 @@ function RootLayoutContent() {
               <Stack.Screen name="chat/[conversationId]" options={{ headerShown: false }} />
               <Stack.Screen name="call/[conversationId]" options={{ headerShown: false }} />
             </Stack>
+            <ActiveCallBanner />
             <IncomingCallModal />
           </>
         </View>
@@ -173,7 +176,9 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <ThemeProvider>
-        <RootLayoutContent />
+        <CallProvider>
+          <RootLayoutContent />
+        </CallProvider>
       </ThemeProvider>
     </AuthProvider>
   );

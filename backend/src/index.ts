@@ -27,13 +27,18 @@ const JWT_SECRET = process.env.JWT_SECRET || 'GOCSPX-AnJHNKKa0VYTR_1dbYfu1pWNHhK
 // ====== WebSocket Signaling Server ======
 const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
-// Map userId -> WebSocket client
-const wsClients = new Map<string, WebSocket>();
+// Map userId -> Set of active WebSocket clients (supports multiple tabs / mobile reconnection)
+const wsClients = new Map<string, Set<WebSocket>>();
 
 const wsBroadcastToUser = (userId: string, payload: object) => {
-    const client = wsClients.get(userId);
-    if (client && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(payload));
+    const clients = wsClients.get(userId);
+    if (clients) {
+        const json = JSON.stringify(payload);
+        for (const client of clients) {
+            if (client.readyState === WebSocket.OPEN) {
+                try { client.send(json); } catch {}
+            }
+        }
     }
 };
 
@@ -44,14 +49,25 @@ wss.on('connection', (ws) => {
         try {
             const msg = JSON.parse(rawData.toString());
 
+            // PING / HEARTBEAT
+            if (msg.type === 'PING') {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'PONG' }));
+                }
+                return;
+            }
+
             // AUTH: client sends JWT token to identify itself
             if (msg.type === 'AUTH') {
                 try {
                     const decoded: any = jwt.verify(msg.token, JWT_SECRET);
                     authenticatedUserId = decoded.id;
-                    wsClients.set(authenticatedUserId!, ws);
+                    if (!wsClients.has(authenticatedUserId!)) {
+                        wsClients.set(authenticatedUserId!, new Set());
+                    }
+                    wsClients.get(authenticatedUserId!)!.add(ws);
                     ws.send(JSON.stringify({ type: 'AUTH_OK' }));
-                    console.log(`[WS] User ${authenticatedUserId} connected`);
+                    console.log(`[WS] User ${authenticatedUserId} connected (active sockets: ${wsClients.get(authenticatedUserId!)!.size})`);
                 } catch {
                     ws.send(JSON.stringify({ type: 'ERROR', error: 'Invalid token' }));
                 }
@@ -94,7 +110,9 @@ wss.on('connection', (ws) => {
                 wsBroadcastToUser(otherUserId, payload);
 
                 // Push notification if recipient is offline
-                if (!wsClients.has(otherUserId) || wsClients.get(otherUserId)!.readyState !== WebSocket.OPEN) {
+                const recipientSockets = wsClients.get(otherUserId);
+                const hasOpenSocket = recipientSockets && Array.from(recipientSockets).some(s => s.readyState === WebSocket.OPEN);
+                if (!hasOpenSocket) {
                     const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
                     if (recipient?.pushToken) {
                         await sendPushNotification(recipient.pushToken, `New message from ${senderUser?.name}`, content, { url: `/chat/${conversationId}` });
@@ -102,11 +120,32 @@ wss.on('connection', (ws) => {
                 }
 
             } else if (type === 'CALL_OFFER') {
+                // End any previous pending calls for this conversation so re-calls work seamlessly
+                await prisma.callRequest.updateMany({
+                    where: { conversationId, status: 'PENDING' },
+                    data: { status: 'ENDED', endedAt: new Date() }
+                });
+
                 // Create a call record
                 const callReq = await prisma.callRequest.create({
                     data: { conversationId, initiatorId: authenticatedUserId!, recipientId: otherUserId, status: 'PENDING' }
                 });
+                
+                // Broadcast to all active sockets of the recipient
                 wsBroadcastToUser(otherUserId, { type: 'CALL_INCOMING', conversationId, callRequestId: callReq.id, sdp, senderName: senderUser?.name, senderId: authenticatedUserId });
+
+                // Create persistent in-app notification in DB
+                try {
+                    await prisma.notification.create({
+                        data: {
+                            userId: otherUserId,
+                            title: `Call from ${senderUser?.name || 'Someone'}`,
+                            message: `Incoming call regarding your item. Tap to open.`,
+                            type: 'AREA_ALERT',
+                            payload: JSON.stringify({ conversationId, senderId: authenticatedUserId })
+                        }
+                    });
+                } catch {}
 
                 // Push notification for offline user
                 const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
@@ -136,9 +175,13 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        if (authenticatedUserId) {
-            wsClients.delete(authenticatedUserId);
-            console.log(`[WS] User ${authenticatedUserId} disconnected`);
+        if (authenticatedUserId && wsClients.has(authenticatedUserId)) {
+            const set = wsClients.get(authenticatedUserId)!;
+            set.delete(ws);
+            if (set.size === 0) {
+                wsClients.delete(authenticatedUserId);
+            }
+            console.log(`[WS] User ${authenticatedUserId} socket closed (remaining: ${set.size})`);
         }
     });
 });

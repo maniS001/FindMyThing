@@ -3,26 +3,30 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Phone, PhoneOff, Mic, MicOff } from 'lucide-react-native';
+import { Phone, PhoneOff, Mic, MicOff, ChevronDown } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
 
 const ICE_SERVERS = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
     ]
 };
 
 type CallState = 'connecting' | 'ringing' | 'active' | 'ended' | 'rejected';
 
 export default function CallScreenWeb() {
-    const { conversationId, otherName, isInitiator } = useLocalSearchParams<{
+    const { conversationId, otherName, isInitiator, incomingSdp } = useLocalSearchParams<{
         conversationId: string;
         otherName: string;
         isInitiator: string;
+        incomingSdp?: string;
     }>();
     const { colors } = useTheme();
+    const { activeCall, setActiveCall, updateCall, endActiveCall } = useCall();
     const router = useRouter();
     const initiator = isInitiator === 'true';
 
@@ -33,15 +37,36 @@ export default function CallScreenWeb() {
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const isExplicitlyEnded = useRef(false);
+
+    const cleanupWebRTC = () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        localStreamRef.current?.getTracks().forEach(t => t.stop());
+        pcRef.current?.close();
+        pcRef.current = null;
+
+        // Stop audio player
+        if (typeof document !== 'undefined') {
+            const player = document.getElementById('findmything-call-audio') as HTMLAudioElement;
+            if (player) {
+                player.srcObject = null;
+                player.remove();
+            }
+        }
+    };
 
     const setupPC = useCallback(async () => {
         const pc = new RTCPeerConnection(ICE_SERVERS);
         pcRef.current = pc;
 
-        // Get mic audio using browser API
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        localStreamRef.current = stream;
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+        try {
+            // Get mic audio using browser API
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            localStreamRef.current = stream;
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+        } catch (micErr) {
+            console.warn('[WebRTC] Microphone access denied or unavailable:', micErr);
+        }
 
         pc.onicecandidate = (e) => {
             if (e.candidate) {
@@ -50,67 +75,149 @@ export default function CallScreenWeb() {
         };
 
         pc.onconnectionstatechange = () => {
+            console.log('[WebRTC] connectionState changed:', pc.connectionState);
             if (pc.connectionState === 'connected') {
                 setCallState('active');
-                timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+                updateCall({ status: 'active' });
+                if (!timerRef.current) {
+                    timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+                }
             } else if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
-                cleanup();
-                setCallState('ended');
-                setTimeout(() => router.back(), 1500);
+                if (isExplicitlyEnded.current) {
+                    cleanupWebRTC();
+                    setCallState('ended');
+                    updateCall({ status: 'ended' });
+                    setTimeout(() => router.back(), 1200);
+                }
             }
         };
 
         // Play received audio in browser
         pc.ontrack = (e) => {
-            const audio = new Audio();
-            audio.srcObject = e.streams[0];
-            audio.autoplay = true;
+            if (typeof document !== 'undefined') {
+                let audio = document.getElementById('findmything-call-audio') as HTMLAudioElement;
+                if (!audio) {
+                    audio = document.createElement('audio');
+                    audio.id = 'findmything-call-audio';
+                    audio.autoplay = true;
+                    (audio as any).playsInline = true;
+                    document.body.appendChild(audio);
+                }
+                audio.srcObject = e.streams[0];
+                audio.play().catch(err => console.warn('[WebRTC audio play autoplay policy]', err));
+            }
         };
 
         return pc;
-    }, [conversationId]);
+    }, [conversationId, updateCall]);
 
-    useEffect(() => {
-        if (!initiator) return;
-        (async () => {
-            const pc = await setupPC();
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            chatService.sendCallOffer(conversationId, offer);
-        })();
-        return () => cleanup();
-    }, []);
-
-    const acceptCall = useCallback(async (incomingSdp: any) => {
+    // Recipient: accept call
+    const acceptCall = useCallback(async (incomingOffer: any) => {
+        console.log('[WebRTC] Accepting incoming offer on web');
         const pc = await setupPC();
-        await pc.setRemoteDescription(new RTCSessionDescription(incomingSdp));
+        await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         chatService.sendCallAnswer(conversationId, answer);
         setCallState('active');
-        timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-    }, [conversationId, setupPC]);
+        updateCall({ status: 'active' });
+        if (!timerRef.current) {
+            timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+        }
+    }, [conversationId, setupPC, updateCall]);
 
+    // Initiator: start offer
+    useEffect(() => {
+        setActiveCall({
+            conversationId,
+            otherName: otherName || 'User',
+            isInitiator: initiator,
+            status: initiator ? 'connecting' : 'ringing',
+            duration: 0,
+            muted: false,
+            incomingSdp,
+        });
+
+        if (initiator) {
+            (async () => {
+                const pc = await setupPC();
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                chatService.sendCallOffer(conversationId, offer);
+            })();
+        } else {
+            // Recipient: If incoming SDP is available, accept immediately
+            const raw = incomingSdp || activeCall?.incomingSdp;
+            if (raw) {
+                try {
+                    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    acceptCall(parsed);
+                } catch (e) {
+                    console.error('[WebRTC] Could not parse incoming SDP', e);
+                }
+            }
+        }
+
+        return () => {
+            // Only teardown if call was explicitly ended, otherwise user navigated/minimized
+            if (isExplicitlyEnded.current) {
+                cleanupWebRTC();
+            }
+        };
+    }, []);
+
+    // WS Event Listeners
     useEffect(() => {
         const handleAnswer = async (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
-            await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-            setCallState('active');
+            console.log('[WebRTC] Caller received CALL_ANSWER');
+            try {
+                await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+                setCallState('active');
+                updateCall({ status: 'active' });
+                if (!timerRef.current) {
+                    timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+                }
+            } catch (err) {
+                console.error('[WebRTC] setRemoteDescription error:', err);
+            }
         };
+
         const handleIce = async (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
-            try { await pcRef.current?.addIceCandidate(new RTCIceCandidate(payload.candidate)); } catch {}
+            try {
+                if (pcRef.current && payload.candidate) {
+                    await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
+                }
+            } catch (err) {
+                console.warn('[WebRTC] addIceCandidate failed', err);
+            }
         };
+
         const handleEnded = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
+            isExplicitlyEnded.current = true;
+            cleanupWebRTC();
             setCallState('ended');
-            setTimeout(() => router.back(), 1500);
+            updateCall({ status: 'ended' });
+            setTimeout(() => {
+                setActiveCall(null);
+                router.back();
+            }, 1200);
         };
+
         const handleRejected = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
+            isExplicitlyEnded.current = true;
+            cleanupWebRTC();
             setCallState('rejected');
-            setTimeout(() => router.back(), 1500);
+            updateCall({ status: 'rejected' });
+            setTimeout(() => {
+                setActiveCall(null);
+                router.back();
+            }, 1200);
         };
+
         const handleIncoming = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId || initiator) return;
             if (payload.sdp) acceptCall(payload.sdp);
@@ -121,6 +228,7 @@ export default function CallScreenWeb() {
         chatService.on('CALL_ENDED', handleEnded);
         chatService.on('CALL_REJECTED', handleRejected);
         chatService.on('CALL_INCOMING', handleIncoming);
+
         return () => {
             chatService.off('CALL_ANSWER', handleAnswer);
             chatService.off('ICE_CANDIDATE', handleIce);
@@ -128,32 +236,37 @@ export default function CallScreenWeb() {
             chatService.off('CALL_REJECTED', handleRejected);
             chatService.off('CALL_INCOMING', handleIncoming);
         };
-    }, [conversationId, initiator, acceptCall]);
+    }, [conversationId, initiator, acceptCall, updateCall, setActiveCall]);
 
-    const endCall = useCallback(() => {
+    const handleEndCall = useCallback(() => {
+        isExplicitlyEnded.current = true;
         chatService.endCall(conversationId);
-        cleanup();
+        cleanupWebRTC();
         setCallState('ended');
-        setTimeout(() => router.back(), 1000);
-    }, [conversationId]);
+        updateCall({ status: 'ended' });
+        setTimeout(() => {
+            setActiveCall(null);
+            router.back();
+        }, 800);
+    }, [conversationId, updateCall, setActiveCall]);
 
-    const rejectCall = useCallback(() => {
+    const handleRejectCall = useCallback(() => {
+        isExplicitlyEnded.current = true;
         chatService.rejectCall(conversationId);
-        cleanup();
+        cleanupWebRTC();
         setCallState('rejected');
-        setTimeout(() => router.back(), 1000);
-    }, [conversationId]);
+        updateCall({ status: 'rejected' });
+        setTimeout(() => {
+            setActiveCall(null);
+            router.back();
+        }, 800);
+    }, [conversationId, updateCall, setActiveCall]);
 
     const toggleMute = useCallback(() => {
         localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
         setMuted(m => !m);
-    }, []);
-
-    const cleanup = () => {
-        if (timerRef.current) clearInterval(timerRef.current);
-        localStreamRef.current?.getTracks().forEach(t => t.stop());
-        pcRef.current?.close();
-    };
+        updateCall({ muted: !muted });
+    }, [muted, updateCall]);
 
     const formatDuration = (s: number) =>
         `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
@@ -167,13 +280,28 @@ export default function CallScreenWeb() {
     };
 
     return (
-        <View style={[styles.container, { backgroundColor: '#1a0533' }]}>
+        <View style={[styles.container, { backgroundColor: '#0F172A' }]}>
+            {/* Top Bar with Minimize button */}
+            <View style={styles.headerBar}>
+                <TouchableOpacity
+                    style={styles.minimizeBtn}
+                    onPress={() => router.back()}
+                    activeOpacity={0.7}
+                >
+                    <ChevronDown size={28} color="#FFF" />
+                </TouchableOpacity>
+                <Text style={styles.headerTitle}>In-App Audio Call</Text>
+                <View style={{ width: 40 }} />
+            </View>
+
             <View style={styles.top}>
                 <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
                 </View>
                 <Text style={styles.name}>{otherName}</Text>
-                <Text style={styles.status}>{stateLabels[callState]}</Text>
+                <Text style={[styles.status, callState === 'active' && { color: '#10B981', fontWeight: '700' }]}>
+                    {stateLabels[callState]}
+                </Text>
             </View>
 
             <View style={styles.controls}>
@@ -193,13 +321,13 @@ export default function CallScreenWeb() {
                             <Phone size={32} color="#FFF" />
                             <Text style={styles.bigBtnLabel}>Accept</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={rejectCall}>
+                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={handleRejectCall}>
                             <PhoneOff size={32} color="#FFF" />
                             <Text style={styles.bigBtnLabel}>Decline</Text>
                         </TouchableOpacity>
                     </View>
                 ) : (callState === 'connecting' || callState === 'active') ? (
-                    <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={endCall}>
+                    <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={handleEndCall}>
                         <PhoneOff size={32} color="#FFF" />
                         <Text style={styles.bigBtnLabel}>End Call</Text>
                     </TouchableOpacity>
@@ -212,17 +340,37 @@ export default function CallScreenWeb() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, justifyContent: 'space-between', paddingVertical: 80, minHeight: '100vh' as any },
-    top: { alignItems: 'center', gap: 16 },
-    avatar: {
-        width: 100, height: 100, borderRadius: 50,
-        backgroundColor: '#7C3AED', justifyContent: 'center', alignItems: 'center',
-        shadowColor: '#7C3AED', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20,
+    container: { flex: 1, justifyContent: 'space-between', paddingVertical: 40, minHeight: '100vh' as any },
+    headerBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
+        paddingTop: 10,
     },
-    avatarText: { color: '#FFF', fontWeight: 'bold', fontSize: 44 },
-    name: { color: '#FFF', fontSize: 28, fontWeight: '700' },
-    status: { color: 'rgba(255,255,255,0.6)', fontSize: 18 },
-    controls: { alignItems: 'center', gap: 32, paddingHorizontal: 40 },
+    minimizeBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerTitle: {
+        color: 'rgba(255, 255, 255, 0.7)',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    top: { alignItems: 'center', gap: 16, marginTop: 20 },
+    avatar: {
+        width: 108, height: 108, borderRadius: 54,
+        backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center',
+        shadowColor: '#2563EB', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 20,
+    },
+    avatarText: { color: '#FFF', fontWeight: 'bold', fontSize: 48 },
+    name: { color: '#FFF', fontSize: 26, fontWeight: '700' },
+    status: { color: 'rgba(255,255,255,0.7)', fontSize: 18 },
+    controls: { alignItems: 'center', gap: 32, paddingHorizontal: 40, marginBottom: 40 },
     ctrlBtn: { width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center' },
     ctrlLabel: { color: '#FFF', fontSize: 12, marginTop: 4 },
     ringerRow: { flexDirection: 'row', gap: 60 },

@@ -3,9 +3,11 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, Vibration } from 'reac
 import { Phone, PhoneOff } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import chatService, { WSPayload } from '../services/chatService';
+import { useCall } from '../contexts/CallContext';
 
 export default function IncomingCallModal() {
     const router = useRouter();
+    const { setActiveCall } = useCall();
     const [incoming, setIncoming] = useState<WSPayload | null>(null);
 
     useEffect(() => {
@@ -13,9 +15,25 @@ export default function IncomingCallModal() {
             setIncoming(payload);
             Vibration.vibrate([0, 1000, 500, 1000, 500, 1000], true);
         };
+
+        const handleCallerCancel = (payload: WSPayload) => {
+            setIncoming(curr => {
+                if (curr && curr.conversationId === payload.conversationId) {
+                    Vibration.cancel();
+                    return null;
+                }
+                return curr;
+            });
+        };
+
         chatService.on('CALL_INCOMING', handleIncoming);
+        chatService.on('CALL_ENDED', handleCallerCancel);
+        chatService.on('CALL_REJECTED', handleCallerCancel);
+
         return () => {
             chatService.off('CALL_INCOMING', handleIncoming);
+            chatService.off('CALL_ENDED', handleCallerCancel);
+            chatService.off('CALL_REJECTED', handleCallerCancel);
             Vibration.cancel();
         };
     }, []);
@@ -24,6 +42,18 @@ export default function IncomingCallModal() {
         if (!incoming) return;
         Vibration.cancel();
         const { conversationId, senderName, sdp } = incoming;
+        const sdpStr = sdp ? JSON.stringify(sdp) : '';
+        
+        setActiveCall({
+            conversationId: conversationId!,
+            otherName: senderName || 'Unknown',
+            isInitiator: false,
+            status: 'connecting',
+            duration: 0,
+            muted: false,
+            incomingSdp: sdpStr,
+        });
+
         setIncoming(null);
         (router as any).push({
             pathname: '/call/[conversationId]',
@@ -31,10 +61,10 @@ export default function IncomingCallModal() {
                 conversationId: conversationId!,
                 otherName: senderName || 'Unknown',
                 isInitiator: 'false',
-                incomingSdp: sdp ? JSON.stringify(sdp) : ''
+                incomingSdp: sdpStr
             }
         });
-    }, [incoming, router]);
+    }, [incoming, router, setActiveCall]);
 
     const decline = useCallback(() => {
         if (!incoming) return;

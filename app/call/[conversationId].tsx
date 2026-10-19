@@ -6,14 +6,16 @@ import {
     RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
     mediaDevices, MediaStream
 } from 'react-native-webrtc';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX } from 'lucide-react-native';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, ChevronDown } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext';
+import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
 
 const ICE_SERVERS = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
     ]
 };
 
@@ -27,6 +29,7 @@ export default function CallScreen() {
         incomingSdp: string;
     }>();
     const { colors } = useTheme();
+    const { activeCall, setActiveCall, updateCall, endActiveCall } = useCall();
     const router = useRouter();
     const initiator = isInitiator === 'true';
 
@@ -39,6 +42,7 @@ export default function CallScreen() {
     const localStreamRef = useRef<MediaStream | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const ringVibrationRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const isExplicitlyEnded = useRef(false);
 
     // Ringing vibration pattern for caller
     const startCallerRinging = () => {
@@ -56,9 +60,13 @@ export default function CallScreen() {
         const pc = new RTCPeerConnection(ICE_SERVERS as any);
         pcRef.current = pc;
 
-        const stream: MediaStream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
-        localStreamRef.current = stream;
-        stream.getTracks().forEach((track: any) => pc.addTrack(track, stream));
+        try {
+            const stream: MediaStream = await mediaDevices.getUserMedia({ audio: true, video: false }) as MediaStream;
+            localStreamRef.current = stream;
+            stream.getTracks().forEach((track: any) => pc.addTrack(track, stream));
+        } catch (err) {
+            console.warn('[WebRTC Native] Mic error:', err);
+        }
 
         pc.onicecandidate = (e: any) => {
             if (e.candidate) {
@@ -71,35 +79,62 @@ export default function CallScreen() {
             if (state === 'connected') {
                 stopRinging();
                 setCallState('active');
-                timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+                updateCall({ status: 'active' });
+                if (!timerRef.current) {
+                    timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+                }
             } else if (['disconnected', 'failed', 'closed'].includes(state)) {
-                cleanup(false);
-                setCallState('ended');
-                setTimeout(() => router.back(), 1500);
+                if (isExplicitlyEnded.current) {
+                    cleanup(false);
+                    setCallState('ended');
+                    updateCall({ status: 'ended' });
+                    setTimeout(() => router.back(), 1500);
+                }
             }
         };
 
         return pc;
-    }, [conversationId]);
+    }, [conversationId, updateCall]);
 
     // ============ Initiator: Create and send offer ============
     useEffect(() => {
-        if (!initiator) return;
-        (async () => {
-            startCallerRinging();
-            const pc = await setupPC();
-            const offer = await pc.createOffer({} as any);
-            await pc.setLocalDescription(offer as any);
-            chatService.sendCallOffer(conversationId, offer);
-        })();
-        return () => cleanup(true);
-    }, []);
+        setActiveCall({
+            conversationId,
+            otherName: otherName || 'User',
+            isInitiator: initiator,
+            status: initiator ? 'connecting' : 'ringing',
+            duration: 0,
+            muted: false,
+            incomingSdp,
+        });
 
-    // ============ Recipient: Accept call immediately if SDP passed via params ============
-    useEffect(() => {
-        if (initiator || !incomingSdp) return;
-        const sdp = JSON.parse(incomingSdp);
-        acceptCall(sdp);
+        if (initiator) {
+            (async () => {
+                startCallerRinging();
+                const pc = await setupPC();
+                const offer = await pc.createOffer({} as any);
+                await pc.setLocalDescription(offer as any);
+                chatService.sendCallOffer(conversationId, offer);
+            })();
+        } else {
+            // Recipient: Accept immediately if SDP is passed
+            const raw = incomingSdp || activeCall?.incomingSdp;
+            if (raw) {
+                try {
+                    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    acceptCall(parsed);
+                } catch (e) {
+                    console.error('[WebRTC Native] Failed to parse incoming SDP', e);
+                }
+            }
+        }
+
+        return () => {
+            stopRinging();
+            if (isExplicitlyEnded.current) {
+                cleanup(true);
+            }
+        };
     }, []);
 
     const acceptCall = useCallback(async (incomingOffer: any) => {
@@ -110,8 +145,11 @@ export default function CallScreen() {
         await pc.setLocalDescription(answer as any);
         chatService.sendCallAnswer(conversationId, answer);
         setCallState('active');
-        timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-    }, [conversationId, setupPC]);
+        updateCall({ status: 'active' });
+        if (!timerRef.current) {
+            timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+        }
+    }, [conversationId, setupPC, updateCall]);
 
     // ============ WS Event Listeners ============
     useEffect(() => {
@@ -120,6 +158,10 @@ export default function CallScreen() {
             await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload.sdp) as any);
             stopRinging();
             setCallState('active');
+            updateCall({ status: 'active' });
+            if (!timerRef.current) {
+                timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+            }
         };
 
         const handleIce = async (payload: WSPayload) => {
@@ -129,16 +171,28 @@ export default function CallScreen() {
 
         const handleEnded = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
+            isExplicitlyEnded.current = true;
             stopRinging();
+            cleanup(false);
             setCallState('ended');
-            setTimeout(() => router.back(), 1500);
+            updateCall({ status: 'ended' });
+            setTimeout(() => {
+                setActiveCall(null);
+                router.back();
+            }, 1200);
         };
 
         const handleRejected = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
+            isExplicitlyEnded.current = true;
             stopRinging();
+            cleanup(false);
             setCallState('rejected');
-            setTimeout(() => router.back(), 1500);
+            updateCall({ status: 'rejected' });
+            setTimeout(() => {
+                setActiveCall(null);
+                router.back();
+            }, 1200);
         };
 
         chatService.on('CALL_ANSWER', handleAnswer);
@@ -152,34 +206,43 @@ export default function CallScreen() {
             chatService.off('CALL_ENDED', handleEnded);
             chatService.off('CALL_REJECTED', handleRejected);
         };
-    }, [conversationId]);
+    }, [conversationId, updateCall, setActiveCall]);
 
     // ============ Controls ============
-    const endCall = useCallback(() => {
+    const handleEndCall = useCallback(() => {
+        isExplicitlyEnded.current = true;
         chatService.endCall(conversationId);
         cleanup(true);
         setCallState('ended');
-        setTimeout(() => router.back(), 1000);
-    }, [conversationId]);
+        updateCall({ status: 'ended' });
+        setTimeout(() => {
+            setActiveCall(null);
+            router.back();
+        }, 800);
+    }, [conversationId, updateCall, setActiveCall]);
 
-    const rejectCall = useCallback(() => {
+    const handleRejectCall = useCallback(() => {
+        isExplicitlyEnded.current = true;
         chatService.rejectCall(conversationId);
         cleanup(true);
         setCallState('rejected');
-        setTimeout(() => router.back(), 1000);
-    }, [conversationId]);
+        updateCall({ status: 'rejected' });
+        setTimeout(() => {
+            setActiveCall(null);
+            router.back();
+        }, 800);
+    }, [conversationId, updateCall, setActiveCall]);
 
     const toggleMute = useCallback(() => {
         const stream = localStreamRef.current;
         if (stream) {
             stream.getAudioTracks().forEach((t: any) => { t.enabled = !t.enabled; });
             setMuted(m => !m);
+            updateCall({ muted: !muted });
         }
-    }, []);
+    }, [muted, updateCall]);
 
     const toggleSpeaker = useCallback(() => {
-        // react-native-webrtc doesn't have built-in speaker toggle
-        // This toggles a visual state; audio routing is managed by OS during call
         setSpeakerOn(s => !s);
     }, []);
 
@@ -202,14 +265,29 @@ export default function CallScreen() {
     };
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: '#1a0533' }]}>
+        <SafeAreaView style={[styles.container, { backgroundColor: '#0F172A' }]}>
+            {/* Header bar with minimize */}
+            <View style={styles.headerBar}>
+                <TouchableOpacity
+                    style={styles.minimizeBtn}
+                    onPress={() => router.back()}
+                    activeOpacity={0.7}
+                >
+                    <ChevronDown size={28} color="#FFF" />
+                </TouchableOpacity>
+                <Text style={styles.headerTitle}>In-App Call</Text>
+                <View style={{ width: 40 }} />
+            </View>
+
             {/* Caller info */}
             <View style={styles.top}>
                 <View style={styles.avatar}>
                     <Text style={styles.avatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
                 </View>
                 <Text style={styles.name}>{otherName}</Text>
-                <Text style={styles.status}>{stateLabels[callState]}</Text>
+                <Text style={[styles.status, callState === 'active' && { color: '#10B981', fontWeight: '700' }]}>
+                    {stateLabels[callState]}
+                </Text>
                 {callState === 'connecting' && (
                     <Text style={styles.hint}>Waiting for {otherName} to answer...</Text>
                 )}
@@ -219,57 +297,42 @@ export default function CallScreen() {
             <View style={styles.controls}>
                 {/* Mute + Speaker row (only when active) */}
                 {callState === 'active' && (
-                    <View style={styles.auxRow}>
+                    <View style={styles.midRow}>
                         <TouchableOpacity
-                            style={[styles.auxBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}
+                            style={[styles.ctrlBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}
                             onPress={toggleMute}
                         >
                             {muted ? <MicOff size={26} color="#FFF" /> : <Mic size={26} color="#FFF" />}
-                            <Text style={styles.auxLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
+                            <Text style={styles.ctrlLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
                         </TouchableOpacity>
 
                         <TouchableOpacity
-                            style={[styles.auxBtn, { backgroundColor: speakerOn ? '#7C3AED' : 'rgba(255,255,255,0.15)' }]}
+                            style={[styles.ctrlBtn, { backgroundColor: speakerOn ? colors.primary : 'rgba(255,255,255,0.15)' }]}
                             onPress={toggleSpeaker}
                         >
                             {speakerOn ? <Volume2 size={26} color="#FFF" /> : <VolumeX size={26} color="#FFF" />}
-                            <Text style={styles.auxLabel}>{speakerOn ? 'Speaker' : 'Earpiece'}</Text>
+                            <Text style={styles.ctrlLabel}>{speakerOn ? 'Speaker On' : 'Speaker Off'}</Text>
                         </TouchableOpacity>
                     </View>
                 )}
 
-                {/* Accept / Decline / End */}
+                {/* Bottom action button */}
                 {callState === 'ringing' ? (
                     <View style={styles.ringerRow}>
-                        <View style={styles.callOption}>
-                            <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={rejectCall}>
-                                <PhoneOff size={32} color="#FFF" />
-                            </TouchableOpacity>
-                            <Text style={styles.callOptionLabel}>Decline</Text>
-                        </View>
-                        <View style={styles.callOption}>
-                            <TouchableOpacity
-                                style={[styles.bigBtn, { backgroundColor: '#10B981' }]}
-                                onPress={() => {
-                                    // SDP already accepted on mount via incomingSdp param
-                                    // This button is for visual feedback only when modal was bypassed
-                                    if (incomingSdp) {
-                                        acceptCall(JSON.parse(incomingSdp));
-                                    }
-                                }}
-                            >
-                                <Phone size={32} color="#FFF" />
-                            </TouchableOpacity>
-                            <Text style={styles.callOptionLabel}>Accept</Text>
-                        </View>
+                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#10B981' }]} onPress={() => acceptCall(null)}>
+                            <Phone size={34} color="#FFF" />
+                            <Text style={styles.bigBtnLabel}>Accept</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={handleRejectCall}>
+                            <PhoneOff size={34} color="#FFF" />
+                            <Text style={styles.bigBtnLabel}>Decline</Text>
+                        </TouchableOpacity>
                     </View>
                 ) : (callState === 'connecting' || callState === 'active') ? (
-                    <View style={styles.callOption}>
-                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={endCall}>
-                            <PhoneOff size={32} color="#FFF" />
-                        </TouchableOpacity>
-                        <Text style={styles.callOptionLabel}>End Call</Text>
-                    </View>
+                    <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#EF4444' }]} onPress={handleEndCall}>
+                        <PhoneOff size={34} color="#FFF" />
+                        <Text style={styles.bigBtnLabel}>End Call</Text>
+                    </TouchableOpacity>
                 ) : (
                     <Text style={styles.endedText}>{stateLabels[callState]}</Text>
                 )}
@@ -279,24 +342,43 @@ export default function CallScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, justifyContent: 'space-between', paddingVertical: 48 },
-    top: { alignItems: 'center', gap: 14, paddingTop: 20 },
-    avatar: {
-        width: 100, height: 100, borderRadius: 50,
-        backgroundColor: '#7C3AED', justifyContent: 'center', alignItems: 'center',
-        shadowColor: '#7C3AED', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 20,
+    container: { flex: 1, justifyContent: 'space-between', paddingVertical: 20 },
+    headerBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 20,
     },
-    avatarText: { color: '#FFF', fontWeight: 'bold', fontSize: 44 },
-    name: { color: '#FFF', fontSize: 28, fontWeight: '700' },
-    status: { color: 'rgba(255,255,255,0.7)', fontSize: 18 },
-    hint: { color: 'rgba(255,255,255,0.4)', fontSize: 14, marginTop: 4 },
-    controls: { alignItems: 'center', gap: 32, paddingHorizontal: 40, paddingBottom: 20 },
-    auxRow: { flexDirection: 'row', gap: 32 },
-    auxBtn: { width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center', gap: 4 },
-    auxLabel: { color: '#FFF', fontSize: 11, marginTop: 2 },
-    ringerRow: { flexDirection: 'row', gap: 64 },
-    callOption: { alignItems: 'center', gap: 10 },
-    callOptionLabel: { color: '#FFF', fontSize: 14, fontWeight: '600' },
-    bigBtn: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center' },
-    endedText: { color: '#FFF', fontSize: 20, marginTop: 20 },
+    minimizeBtn: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerTitle: {
+        color: 'rgba(255, 255, 255, 0.7)',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    top: { alignItems: 'center', gap: 16, marginTop: 40 },
+    avatar: {
+        width: 108, height: 108, borderRadius: 54,
+        backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center',
+        shadowColor: '#2563EB', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.6, shadowRadius: 20,
+        elevation: 8,
+    },
+    avatarText: { color: '#FFF', fontWeight: 'bold', fontSize: 48 },
+    name: { color: '#FFF', fontSize: 26, fontWeight: '700' },
+    status: { color: 'rgba(255,255,255,0.7)', fontSize: 18, marginTop: 4 },
+    hint: { color: 'rgba(255,255,255,0.4)', fontSize: 14 },
+    controls: { alignItems: 'center', gap: 28, paddingHorizontal: 40, marginBottom: 40 },
+    midRow: { flexDirection: 'row', gap: 32 },
+    ctrlBtn: { width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center', gap: 4 },
+    ctrlLabel: { color: '#FFF', fontSize: 11, fontWeight: '500' },
+    ringerRow: { flexDirection: 'row', gap: 60 },
+    bigBtn: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', gap: 4, elevation: 8 },
+    bigBtnLabel: { color: '#FFF', fontSize: 12, fontWeight: '600' },
+    endedText: { color: '#FFF', fontSize: 18, marginTop: 20 },
 });

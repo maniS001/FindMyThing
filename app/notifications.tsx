@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bell, RefreshCw, X } from 'lucide-react-native';
+import { ArrowLeft, Bell, RefreshCw, X, Phone, PhoneOff } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import FeedbackModal from '../components/FeedbackModal';
 import { API_URL } from '../constants/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { useCall } from '../contexts/CallContext';
 import { showAlert } from '../utils/alert';
 import { clearAllNotifications, deleteNotification, markNotificationRead } from '../store';
 
@@ -24,6 +25,7 @@ export default function NotificationsScreen() {
     const router = useRouter();
     const { colors } = useTheme();
     const { token } = useAuth();
+    const { activeCall, endActiveCall, formatDuration } = useCall();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState(false);
@@ -282,6 +284,49 @@ export default function NotificationsScreen() {
                 </TouchableOpacity>
             </View>
 
+            {/* Active Ongoing Call Card (Instagram style in notifications) */}
+            {activeCall && (activeCall.status === 'active' || activeCall.status === 'connecting') && (
+                <View style={styles.activeCallBanner}>
+                    <View style={styles.activeCallTop}>
+                        <View style={styles.activeCallIconCircle}>
+                            <Phone size={18} color="#FFF" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.activeCallTitle} numberOfLines={1}>
+                                In-App Call with {activeCall.otherName}
+                            </Text>
+                            <Text style={styles.activeCallTime}>
+                                {activeCall.status === 'active' ? `Ongoing • ${formatDuration(activeCall.duration)}` : 'Connecting...'}
+                            </Text>
+                        </View>
+                    </View>
+                    <View style={styles.activeCallBtns}>
+                        <TouchableOpacity
+                            style={styles.activeCallReturnButton}
+                            onPress={() => router.push({
+                                pathname: '/call/[conversationId]',
+                                params: {
+                                    conversationId: activeCall.conversationId,
+                                    otherName: activeCall.otherName,
+                                    isInitiator: String(activeCall.isInitiator),
+                                    incomingSdp: activeCall.incomingSdp || ''
+                                }
+                            })}
+                        >
+                            <Text style={styles.activeCallReturnBtnText}>Return to Call</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={styles.activeCallCutButton}
+                            onPress={endActiveCall}
+                        >
+                            <PhoneOff size={16} color="#FFF" />
+                            <Text style={styles.activeCallCutBtnText}>Cut Call</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
+
             {loading ? (
                 <View style={styles.center}>
                     <ActivityIndicator size="large" color={colors.primary} />
@@ -437,5 +482,75 @@ const styles = StyleSheet.create({
     },
     clearAllButton: {
         padding: 8,
+    },
+    activeCallBanner: {
+        marginHorizontal: 16,
+        marginTop: 12,
+        marginBottom: 8,
+        backgroundColor: '#10B981',
+        borderRadius: 16,
+        padding: 14,
+        shadowColor: '#10B981',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
+    },
+    activeCallTop: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    activeCallIconCircle: {
+        width: 38,
+        height: 38,
+        borderRadius: 19,
+        backgroundColor: 'rgba(255, 255, 255, 0.25)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    activeCallTitle: {
+        color: '#FFFFFF',
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    activeCallTime: {
+        color: 'rgba(255, 255, 255, 0.9)',
+        fontSize: 13,
+        fontWeight: '600',
+        marginTop: 2,
+    },
+    activeCallBtns: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 12,
+    },
+    activeCallReturnButton: {
+        flex: 1,
+        backgroundColor: 'rgba(255, 255, 255, 0.25)',
+        paddingVertical: 10,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    activeCallReturnBtnText: {
+        color: '#FFFFFF',
+        fontWeight: '700',
+        fontSize: 13,
+    },
+    activeCallCutButton: {
+        flex: 1,
+        backgroundColor: '#EF4444',
+        paddingVertical: 10,
+        borderRadius: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+    },
+    activeCallCutBtnText: {
+        color: '#FFFFFF',
+        fontWeight: '700',
+        fontSize: 13,
     },
 });
