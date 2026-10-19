@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePathname, useRouter } from 'expo-router';
-import { ArrowLeft, Bell, Info, Menu, Settings, User } from 'lucide-react-native';
+import { ArrowLeft, Bell, Info, Menu, Settings, User, MessageCircle } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -47,6 +47,7 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
     };
 
     const menuItems: MenuItem[] = [
+        { icon: <MessageCircle size={20} color={colors.text} />, label: 'Messages', route: '/chat' },
         { icon: <User size={20} color={colors.text} />, label: 'Account Details', route: '/account' },
         { icon: <Settings size={20} color={colors.text} />, label: 'Settings', route: '/settings' },
         { icon: <Info size={20} color={colors.text} />, label: 'About Us', route: '/about' },
@@ -108,6 +109,19 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
                             <User size={20} color={colors.headerText} />
                         </TouchableOpacity>
                     )}
+
+                    {/* Messages Button */}
+                    <TouchableOpacity
+                        onPress={() => {
+                            if (pathname !== '/chat') {
+                                router.push('/chat' as never);
+                            }
+                        }}
+                        style={[styles.iconButton, { backgroundColor: 'rgba(255, 255, 255, 0.2)' }]}
+                        activeOpacity={0.7}
+                    >
+                        <MessageCircle size={20} color={colors.headerText} />
+                    </TouchableOpacity>
 
                     {/* Notification Button */}
                     <TouchableOpacity

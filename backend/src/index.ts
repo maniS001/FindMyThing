@@ -104,20 +104,70 @@ wss.on('connection', (ws) => {
                 // Update conversation timestamp
                 await prisma.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
 
-                const payload = { type: 'CHAT_MESSAGE', conversationId, messageId: message.id, content, senderId: authenticatedUserId, senderName: senderUser?.name, createdAt: message.createdAt };
-                // Send to both sender and receiver
-                ws.send(JSON.stringify(payload));
-                wsBroadcastToUser(otherUserId, payload);
-
-                // Push notification if recipient is offline
                 const recipientSockets = wsClients.get(otherUserId);
                 const hasOpenSocket = recipientSockets && Array.from(recipientSockets).some(s => s.readyState === WebSocket.OPEN);
+
+                const payload = {
+                    type: 'CHAT_MESSAGE',
+                    conversationId,
+                    messageId: message.id,
+                    content,
+                    senderId: authenticatedUserId,
+                    senderName: senderUser?.name,
+                    createdAt: message.createdAt,
+                    delivered: !!hasOpenSocket,
+                    read: false
+                };
+
+                // Send to sender (with delivered status if recipient has active socket)
+                ws.send(JSON.stringify(payload));
+                // Send to receiver
+                wsBroadcastToUser(otherUserId, payload);
+
+                // Create persistent in-app notification in DB for recipient
+                try {
+                    await prisma.notification.create({
+                        data: {
+                            userId: otherUserId,
+                            title: `New message from ${senderUser?.name || 'Someone'}`,
+                            message: content.length > 80 ? content.slice(0, 77) + '...' : content,
+                            type: 'CHAT_MESSAGE',
+                            payload: JSON.stringify({
+                                conversationId,
+                                senderId: authenticatedUserId,
+                                senderName: senderUser?.name
+                            })
+                        }
+                    });
+                } catch (notifErr) {
+                    console.error('[Chat notification error]', notifErr);
+                }
+
+                // Push notification if recipient is offline
                 if (!hasOpenSocket) {
                     const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
                     if (recipient?.pushToken) {
                         await sendPushNotification(recipient.pushToken, `New message from ${senderUser?.name}`, content, { url: `/chat/${conversationId}` });
                     }
                 }
+
+            } else if (type === 'MESSAGE_DELIVERED') {
+                wsBroadcastToUser(otherUserId, {
+                    type: 'MESSAGE_DELIVERED',
+                    conversationId,
+                    messageId: msg.messageId
+                });
+
+            } else if (type === 'MESSAGE_READ') {
+                await prisma.message.updateMany({
+                    where: { conversationId, senderId: otherUserId, read: false },
+                    data: { read: true }
+                });
+                wsBroadcastToUser(otherUserId, {
+                    type: 'MESSAGES_READ',
+                    conversationId,
+                    readBy: authenticatedUserId
+                });
 
             } else if (type === 'CALL_OFFER') {
                 // End any previous pending calls for this conversation so re-calls work seamlessly
@@ -2048,6 +2098,8 @@ app.get('/api/conversations/:id/messages', authenticateToken, async (req: any, r
 
         // Mark all as read
         await prisma.message.updateMany({ where: { conversationId: id, senderId: { not: userId }, read: false }, data: { read: true } });
+        const otherUserId = conv.initiatorId === userId ? conv.recipientId : conv.initiatorId;
+        wsBroadcastToUser(otherUserId, { type: 'MESSAGES_READ', conversationId: id, readBy: userId });
 
         const messages = await prisma.message.findMany({
             where: { conversationId: id },

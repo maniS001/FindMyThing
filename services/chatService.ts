@@ -7,6 +7,9 @@ export type WSMessageType =
     | 'PING'
     | 'PONG'
     | 'CHAT_MESSAGE'
+    | 'MESSAGE_DELIVERED'
+    | 'MESSAGE_READ'
+    | 'MESSAGES_READ'
     | 'CALL_OFFER'
     | 'CALL_ANSWER'
     | 'ICE_CANDIDATE'
@@ -27,6 +30,9 @@ export interface WSPayload {
     candidate?: any;
     callRequestId?: string;
     error?: string;
+    delivered?: boolean;
+    read?: boolean;
+    readBy?: string;
 }
 
 type MessageHandler = (payload: WSPayload) => void;
@@ -133,6 +139,14 @@ class ChatService {
 
     sendMessage = (conversationId: string, content: string) => {
         this.send({ type: 'CHAT_MESSAGE', conversationId, content });
+    };
+
+    sendDeliveryReceipt = (conversationId: string, messageId: string) => {
+        this.send({ type: 'MESSAGE_DELIVERED', conversationId, messageId });
+    };
+
+    sendReadReceipt = (conversationId: string) => {
+        this.send({ type: 'MESSAGE_READ', conversationId });
     };
 
     sendCallOffer = (conversationId: string, sdp: any) => {

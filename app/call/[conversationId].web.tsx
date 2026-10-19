@@ -7,6 +7,7 @@ import { Phone, PhoneOff, Mic, MicOff, ChevronDown } from 'lucide-react-native';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
+import soundEffects from '../../utils/soundEffects';
 
 const ICE_SERVERS = {
     iceServers: [
@@ -40,6 +41,7 @@ export default function CallScreenWeb() {
     const isExplicitlyEnded = useRef(false);
 
     const cleanupWebRTC = () => {
+        soundEffects.stopAll();
         if (timerRef.current) clearInterval(timerRef.current);
         localStreamRef.current?.getTracks().forEach(t => t.stop());
         pcRef.current?.close();
@@ -77,6 +79,7 @@ export default function CallScreenWeb() {
         pc.onconnectionstatechange = () => {
             console.log('[WebRTC] connectionState changed:', pc.connectionState);
             if (pc.connectionState === 'connected') {
+                soundEffects.stopRingback();
                 setCallState('active');
                 updateCall({ status: 'active' });
                 if (!timerRef.current) {
@@ -114,6 +117,7 @@ export default function CallScreenWeb() {
     // Recipient: accept call
     const acceptCall = useCallback(async (incomingOffer: any) => {
         console.log('[WebRTC] Accepting incoming offer on web');
+        soundEffects.stopAll();
         const pc = await setupPC();
         await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
         const answer = await pc.createAnswer();
@@ -139,6 +143,7 @@ export default function CallScreenWeb() {
         });
 
         if (initiator) {
+            soundEffects.startRingback();
             (async () => {
                 const pc = await setupPC();
                 const offer = await pc.createOffer();
@@ -159,6 +164,7 @@ export default function CallScreenWeb() {
         }
 
         return () => {
+            soundEffects.stopAll();
             // Only teardown if call was explicitly ended, otherwise user navigated/minimized
             if (isExplicitlyEnded.current) {
                 cleanupWebRTC();
@@ -171,6 +177,7 @@ export default function CallScreenWeb() {
         const handleAnswer = async (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
             console.log('[WebRTC] Caller received CALL_ANSWER');
+            soundEffects.stopRingback();
             try {
                 await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload.sdp));
                 setCallState('active');
@@ -197,6 +204,7 @@ export default function CallScreenWeb() {
         const handleEnded = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
             isExplicitlyEnded.current = true;
+            soundEffects.stopAll();
             cleanupWebRTC();
             setCallState('ended');
             updateCall({ status: 'ended' });
@@ -209,6 +217,7 @@ export default function CallScreenWeb() {
         const handleRejected = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
             isExplicitlyEnded.current = true;
+            soundEffects.stopAll();
             cleanupWebRTC();
             setCallState('rejected');
             updateCall({ status: 'rejected' });
@@ -240,6 +249,7 @@ export default function CallScreenWeb() {
 
     const handleEndCall = useCallback(() => {
         isExplicitlyEnded.current = true;
+        soundEffects.stopAll();
         chatService.endCall(conversationId);
         cleanupWebRTC();
         setCallState('ended');
@@ -252,6 +262,7 @@ export default function CallScreenWeb() {
 
     const handleRejectCall = useCallback(() => {
         isExplicitlyEnded.current = true;
+        soundEffects.stopAll();
         chatService.rejectCall(conversationId);
         cleanupWebRTC();
         setCallState('rejected');
@@ -305,7 +316,7 @@ export default function CallScreenWeb() {
             </View>
 
             <View style={styles.controls}>
-                {callState === 'active' && (
+                {(callState === 'connecting' || callState === 'active') && (
                     <TouchableOpacity
                         style={[styles.ctrlBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}
                         onPress={toggleMute}

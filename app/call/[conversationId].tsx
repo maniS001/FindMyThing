@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Vibration, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -10,6 +10,7 @@ import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, ChevronDown } from 'luc
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
+import soundEffects from '../../utils/soundEffects';
 
 const ICE_SERVERS = {
     iceServers: [
@@ -41,18 +42,14 @@ export default function CallScreen() {
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const ringVibrationRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isExplicitlyEnded = useRef(false);
 
-    // Ringing vibration pattern for caller
+    // Audio ringback for caller
     const startCallerRinging = () => {
-        ringVibrationRef.current = setInterval(() => {
-            Vibration.vibrate(400);
-        }, 2000);
+        soundEffects.startRingback();
     };
     const stopRinging = () => {
-        if (ringVibrationRef.current) clearInterval(ringVibrationRef.current);
-        Vibration.cancel();
+        soundEffects.stopAll();
     };
 
     // ============ Setup PeerConnection ============
@@ -295,8 +292,8 @@ export default function CallScreen() {
 
             {/* Controls */}
             <View style={styles.controls}>
-                {/* Mute + Speaker row (only when active) */}
-                {callState === 'active' && (
+                {/* Mute + Speaker row (available during calling & active) */}
+                {(callState === 'connecting' || callState === 'active') && (
                     <View style={styles.midRow}>
                         <TouchableOpacity
                             style={[styles.ctrlBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}

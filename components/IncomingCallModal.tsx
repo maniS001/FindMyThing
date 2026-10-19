@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Vibration } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
 import { Phone, PhoneOff } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import chatService, { WSPayload } from '../services/chatService';
 import { useCall } from '../contexts/CallContext';
+import soundEffects from '../utils/soundEffects';
 
 export default function IncomingCallModal() {
     const router = useRouter();
@@ -13,13 +14,13 @@ export default function IncomingCallModal() {
     useEffect(() => {
         const handleIncoming = (payload: WSPayload) => {
             setIncoming(payload);
-            Vibration.vibrate([0, 1000, 500, 1000, 500, 1000], true);
+            soundEffects.startRingtone();
         };
 
         const handleCallerCancel = (payload: WSPayload) => {
             setIncoming(curr => {
                 if (curr && curr.conversationId === payload.conversationId) {
-                    Vibration.cancel();
+                    soundEffects.stopRingtone();
                     return null;
                 }
                 return curr;
@@ -34,13 +35,13 @@ export default function IncomingCallModal() {
             chatService.off('CALL_INCOMING', handleIncoming);
             chatService.off('CALL_ENDED', handleCallerCancel);
             chatService.off('CALL_REJECTED', handleCallerCancel);
-            Vibration.cancel();
+            soundEffects.stopRingtone();
         };
     }, []);
 
     const accept = useCallback(() => {
         if (!incoming) return;
-        Vibration.cancel();
+        soundEffects.stopRingtone();
         const { conversationId, senderName, sdp } = incoming;
         const sdpStr = sdp ? JSON.stringify(sdp) : '';
         
@@ -68,7 +69,7 @@ export default function IncomingCallModal() {
 
     const decline = useCallback(() => {
         if (!incoming) return;
-        Vibration.cancel();
+        soundEffects.stopRingtone();
         chatService.rejectCall(incoming.conversationId!);
         setIncoming(null);
     }, [incoming]);

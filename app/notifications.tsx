@@ -167,6 +167,20 @@ export default function NotificationsScreen() {
             }
         };
 
+        const handleOpenChat = () => {
+            if (payload.conversationId) {
+                router.push({
+                    pathname: '/chat/[conversationId]',
+                    params: {
+                        conversationId: payload.conversationId,
+                        otherName: payload.senderName || 'User'
+                    }
+                });
+            } else {
+                router.push('/chat' as never);
+            }
+        };
+
         // Determine notification type for founder notifications
         const isFounderNotification = item.type === 'COMPLAINT_CLOSED' ||
             item.type === 'COMPLAINT_REOPENED' ||
@@ -176,6 +190,7 @@ export default function NotificationsScreen() {
             if (item.type === 'ITEM_RECOVERED' || isResolved) return '#10B981';
             if (item.type === 'COMPLAINT_CLOSED') return '#F59E0B';
             if (item.type === 'COMPLAINT_REOPENED') return colors.primary;
+            if (item.type === 'CHAT_MESSAGE') return '#3B82F6';
             return colors.primary;
         };
 
@@ -187,6 +202,8 @@ export default function NotificationsScreen() {
                     return { text: 'CLOSED', color: '#F59E0B' };
                 case 'COMPLAINT_REOPENED':
                     return { text: 'REOPENED', color: colors.primary };
+                case 'CHAT_MESSAGE':
+                    return { text: 'MESSAGE', color: '#3B82F6' };
                 default:
                     return null;
             }
@@ -216,7 +233,7 @@ export default function NotificationsScreen() {
                         {new Date(item.createdAt).toLocaleDateString()}
                     </Text>
 
-                    {(isClaimRequest || item.type === 'AREA_ALERT' || item.type === 'MATCH_ALERT') && (
+                    {(isClaimRequest || item.type === 'AREA_ALERT' || item.type === 'MATCH_ALERT' || item.type === 'CHAT_MESSAGE') && (
                         <View style={styles.actionsContainer}>
                             {isClaimRequest && isResolved ? (
                                 <View style={[styles.recoveredBadge, { backgroundColor: '#10B981' + '20' }]}>
@@ -253,6 +270,13 @@ export default function NotificationsScreen() {
                                     onPress={handleViewItem}
                                 >
                                     <Text style={styles.claimButtonText}>Claim now</Text>
+                                </TouchableOpacity>
+                            ) : item.type === 'CHAT_MESSAGE' ? (
+                                <TouchableOpacity
+                                    style={[styles.claimButton, { backgroundColor: '#3B82F6', marginTop: 8 }]}
+                                    onPress={handleOpenChat}
+                                >
+                                    <Text style={styles.claimButtonText}>Open Chat 💬</Text>
                                 </TouchableOpacity>
                             ) : null}
                         </View>
