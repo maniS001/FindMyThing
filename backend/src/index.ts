@@ -226,7 +226,7 @@ wss.on('connection', (ws) => {
                 wsBroadcastToUser(otherUserId, { type: 'CALL_REJECTED', conversationId });
             }
 
-        } catch (err) {
+        } catch (err: any) {
             console.error('[WS] Error:', err);
         }
     });
@@ -605,6 +605,132 @@ Respond ONLY with this JSON:
     } catch (err: any) {
         console.error('AI validate-answers error:', err.message);
         res.json({ status: 'wrong', message: 'Validation failed.' });
+    }
+});
+
+// ============= AI Support Assistant Endpoint =============
+
+function getFallbackSupportResponse(query: string): string {
+    const q = (query || '').toLowerCase();
+
+    if (q.includes('wallet') || q.includes('purse') || q.includes('card') || q.includes('atm') || q.includes('credit') || q.includes('debit')) {
+        return `🚨 Immediate Steps for Lost Wallet/Cards:
+1. Block All Cards Immediately: Open your bank mobile apps or call customer care to block your debit/credit cards right now to prevent fraudulent transactions.
+2. File a Lost Report (NCR): Visit your local police station or state police citizen portal to lodge a lost report for documents (PAN, Aadhaar, Driving License, Voter ID). This protects you from identity theft.
+3. Post a Report on FindMyThing: Go to "Report Lost Item" -> Choose "Wallet / Purse". Mark the exact location and approximate time. Mention brand, color, but DO NOT publicly disclose full card numbers or sensitive credentials.
+4. Keep Checking Notifications: If an honest finder spots it, our AI smart matching will alert you instantly.`;
+    }
+
+    if (q.includes('phone') || q.includes('mobile') || q.includes('iphone') || q.includes('android')) {
+        return `🚨 Immediate Steps for Lost Mobile Phone:
+1. Track / Mark as Lost:
+   - Android: Visit google.com/android/find to locate, ring, secure, or erase the device.
+   - iPhone: Visit icloud.com/find and mark the device as "Lost Mode".
+2. Block SIM Card: Contact your telecom provider (Airtel/Jio/Vi/BSNL) to block your SIM so no one can intercept incoming OTPs or reset passwords.
+3. Block IMEI on CEIR Portal: Visit ceir.gov.in to block your phone's IMEI across all Indian telecom networks so it cannot be reused.
+4. Post on FindMyThing: Submit a Lost Report with model, color, and unique case details.
+5. Watch out for scams: Never share your lock-screen passcode, Apple ID, or Google password with anyone claiming to have your phone.`;
+    }
+
+    if (q.includes('verify') || q.includes('ownership') || q.includes('proof') || q.includes('claim')) {
+        return `🛡️ How to Verify Item Ownership:
+1. Secret Verification Questions: When reporting a found item, keep private details hidden (e.g., serial number, wallpaper, contents inside pockets). Ask the claimant to describe these specific secret details.
+2. Cross-Check Proof: Request a purchase invoice, serial number match, photo of the owner with the item, or ID verification.
+3. Never release the item without mutual verification!
+4. Use QR Handover: The owner must generate the handover QR code from within FindMyThing, and the founder scans it to confirm the exchange.`;
+    }
+
+    if (q.includes('qr') || q.includes('handover') || q.includes('return')) {
+        return `🤝 How the Secure QR Handover Works:
+1. Once both parties agree to meet after verification, the Owner opens the claim in FindMyThing and taps "Generate Handover QR Code".
+2. The Finder taps "Scan Handover QR Code" using the in-app scanner.
+3. Once scanned, the system registers the secure digital handshake, immediately updating the status to "Resolved" and releasing any pledged reward acknowledgment.
+4. Always conduct the handover in a well-lit, public location (such as a metro station, coffee shop, or police station).`;
+    }
+
+    if (q.includes('call') || q.includes('audio') || q.includes('mic') || q.includes('hear')) {
+        return `📞 Troubleshooting In-App Audio Calls:
+1. Microphone Permission: Make sure your browser or phone has granted microphone permission to FindMyThing.
+2. Audio Controls: You can toggle Mute and Speaker directly from the call screen or ringing screen.
+3. Network Stability: WebRTC voice calls require an active internet connection (Wi-Fi or 4G/5G).
+4. If Call Fails to Connect: Try hanging up and calling again, or send a direct in-app message in the chat screen to coordinate.`;
+    }
+
+    if (q.includes('money') || q.includes('ransom') || q.includes('charge') || q.includes('fee') || q.includes('pay') || q.includes('scam') || q.includes('fraud')) {
+        return `⚠️ CRITICAL SAFETY ALERT — Beware of Scams:
+1. DO NOT SEND ADVANCE MONEY: Never pay any upfront courier charges, delivery fees, or "reward deposits" before seeing and verifying your item in person.
+2. Legitimate finders will gladly meet in a public location or hand the item over to a local police station or lost-and-found desk.
+3. If anyone threatens you or demands unreasonable payments, block them and report the user immediately via FindMyThing support or your local police.`;
+    }
+
+    if (q.includes('message') || q.includes('chat') || q.includes('tick')) {
+        return `💬 In-App Chat Status Guide:
+- Single Tick (✓): Message sent from your device to the server.
+- Double Grey Ticks (✓✓): Message successfully delivered to the recipient's phone.
+- Double Blue Ticks (✓✓): Recipient has opened and read your message.
+- If the other person is not replying, their phone might be offline or silent. Check back in a little while or try the in-app audio call button.`;
+    }
+
+    if (q.includes('safe') || q.includes('meet') || q.includes('location')) {
+        return `💡 Safe Handover Guidelines:
+1. Meet in Broad Daylight: Choose busy, well-lit public spots such as metro/train stations, shopping malls, university desks, or near police stations.
+2. Never Meet in Secluded Areas: Never meet alone at late night or invite strangers to private residences.
+3. Bring a Friend: Whenever possible, bring a friend or family member along for the handover.
+4. Verify First, Return Second: Complete the digital QR verification handshake on the spot.`;
+    }
+
+    return `👋 I am FindBot, your FindMyThing assistant!
+Here is how I can assist you:
+- Report a Lost Item: Tap "Report Lost Item" on the home screen to submit item details and location.
+- Report a Found Item: Tap "Report Found Item" to upload photos and assist the owner.
+- AI Smart Matching: Our AI automatically pairs lost reports with found reports and notifies you.
+- Safe Communication: Chat or call anonymously inside the app without revealing your personal phone number.
+- Need urgent advice? Ask me about: "Lost wallet", "Lost phone", "How to verify ownership", "Secure QR handover", or "Safety tips".`;
+}
+
+app.post('/api/ai/support-assistant', async (req, res) => {
+    try {
+        const { message, history } = req.body;
+        if (!message || typeof message !== 'string') {
+            return res.status(400).json({ error: 'Message is required' });
+        }
+
+        const prompt = `You are "FindBot", the official AI Support & Safety Assistant for "FindMyThing", an AI-powered lost and found recovery network.
+Your mission is to provide clear, reassuring, empathetic, and actionable guidance to users.
+
+CONTEXT ABOUT FINDMYTHING:
+- Core Capabilities:
+  1. "Report Lost Item" (Victim): Submit category, title, description, location, photos, optional reward, and secret verification questions.
+  2. "Report Found Item" (Founder): Honest finders report discovered items with location and photos. Sensitive details (serial numbers, cash amount, inside marks) are kept hidden as proof challenges.
+  3. "Smart AI Matching": Automatically matches lost complaints with found reports using AI semantic comparison and geo-proximity, sending instant push notifications.
+  4. "In-App Chat & Voice Calls": Real-time chat with delivery receipts (Single tick = Sent, Double tick = Delivered, Blue = Read). Anonymous WebRTC voice calls without revealing phone numbers, with mute and speaker toggles.
+  5. "Ownership Verification": Claimant answers secret questions or provides proof (receipt, unique mark, photo) before handover.
+  6. "Secure QR Handover": Owner generates claim QR code in the app; founder scans it upon meeting to digitally confirm item return and resolve the claim.
+  7. "Communities & Local Alerts": College campuses, offices, residential areas with localized lost-and-found boards.
+
+INSTRUCTION RULES:
+- If user asks about lost wallet/cards/phone/IDs: Give urgent, prioritized security actions first (blocking cards/SIM/CEIR, filing police NCR report) before app reporting steps.
+- If user mentions ransom, upfront payment, courier fees, or scams: Warn them strongly NEVER to pay advance money or share OTPs/passwords.
+- If user has technical issues (calls, notifications, QR scan, chat ticks): Explain the exact technical remedy clearly.
+- Keep responses friendly, structured with bullet points, concise, and focused on resolution.
+
+User Question: "${message}"
+${history && history.length ? 'Recent Context:\n' + JSON.stringify(history.slice(-4)) : ''}
+
+Respond directly:`;
+
+        let reply;
+        try {
+            reply = await callGemini(prompt);
+        } catch (aiErr: any) {
+            console.warn('Gemini support bot call failed, falling back to rule-based assistant:', aiErr.message);
+            reply = getFallbackSupportResponse(message);
+        }
+
+        res.json({ reply });
+    } catch (err) {
+        console.error('Support assistant error:', err);
+        res.json({ reply: getFallbackSupportResponse(req.body?.message || '') });
     }
 });
 

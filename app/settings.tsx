@@ -1,21 +1,86 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, ChevronRight, FileText, HelpCircle, Moon, Shield, Sun, Trash2 } from 'lucide-react-native';
-import { ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import {
+    AlertTriangle,
+    ArrowLeft,
+    BookOpen,
+    ChevronRight,
+    FileText,
+    HelpCircle,
+    Info,
+    Moon,
+    Shield,
+    Sun,
+    Trash2,
+} from 'lucide-react-native';
+import React, { useState } from 'react';
+import {
+    Alert,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { API_URL } from '../constants/api';
 import { useTheme } from '../contexts/ThemeContext';
 
 export default function SettingsScreen() {
     const router = useRouter();
     const { theme, toggleTheme, colors } = useTheme();
+    const [deleting, setDeleting] = useState(false);
+
+    const handleDeleteAccount = () => {
+        const confirmMessage = 'Are you sure you want to delete your account? This will permanently delete your profile, complaints, images, and chat history. This action cannot be undone.';
+        
+        if (Platform.OS === 'web') {
+            if (window.confirm(confirmMessage)) {
+                executeDelete();
+            }
+        } else {
+            Alert.alert(
+                'Delete Account',
+                confirmMessage,
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete', style: 'destructive', onPress: executeDelete },
+                ]
+            );
+        }
+    };
+
+    const executeDelete = async () => {
+        try {
+            setDeleting(true);
+            const token = await AsyncStorage.getItem('token');
+            if (token) {
+                await fetch(`${API_URL}/auth/account`, {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+            }
+            await AsyncStorage.clear();
+            router.replace('/auth/login' as never);
+        } catch (error) {
+            console.error('Delete account error:', error);
+            await AsyncStorage.clear();
+            router.replace('/auth/login' as never);
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-            <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
+            <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                     <ArrowLeft size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={[styles.title, { color: colors.text }]}>Settings</Text>
-                <View style={{ width: 24 }} />
+                <View style={{ width: 32 }} />
             </View>
 
             <ScrollView contentContainerStyle={styles.content}>
@@ -50,49 +115,136 @@ export default function SettingsScreen() {
                     </View>
                 </View>
 
-                {/* Account Settings */}
+                {/* Support & Resources */}
                 <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <Text style={[styles.cardTitle, { color: colors.text }]}>
-                        About & Legal
+                        Support & Guidance
                     </Text>
 
-                    <TouchableOpacity style={styles.menuItem}>
+                    {/* Help & Support */}
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={() => router.push('/help' as never)}
+                        activeOpacity={0.7}
+                    >
                         <View style={styles.menuLeft}>
-                            <Shield size={20} color={colors.textSecondary} />
-                            <Text style={[styles.menuLabel, { color: colors.text }]}>Privacy Policy</Text>
+                            <HelpCircle size={20} color={colors.primary} />
+                            <View>
+                                <Text style={[styles.menuLabel, { color: colors.text }]}>Help & Support</Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    FindBot AI Assistant & Troubleshooting
+                                </Text>
+                            </View>
                         </View>
                         <ChevronRight size={20} color={colors.border} />
                     </TouchableOpacity>
+
                     <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-                    <TouchableOpacity style={styles.menuItem}>
+                    {/* About Us (Kept right after Help & Support) */}
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={() => router.push('/about' as never)}
+                        activeOpacity={0.7}
+                    >
                         <View style={styles.menuLeft}>
-                            <FileText size={20} color={colors.textSecondary} />
-                            <Text style={[styles.menuLabel, { color: colors.text }]}>Terms of Service</Text>
+                            <Info size={20} color={colors.primary} />
+                            <View>
+                                <Text style={[styles.menuLabel, { color: colors.text }]}>About Us</Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    Our Problem, Goal, and Vision
+                                </Text>
+                            </View>
+                        </View>
+                        <ChevronRight size={20} color={colors.border} />
+                    </TouchableOpacity>
+
+                    <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                    {/* App Manual */}
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={() => router.push('/manual' as never)}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.menuLeft}>
+                            <BookOpen size={20} color={colors.primary} />
+                            <View>
+                                <Text style={[styles.menuLabel, { color: colors.text }]}>App Manual</Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    Complete Feature & Safety Guide
+                                </Text>
+                            </View>
                         </View>
                         <ChevronRight size={20} color={colors.border} />
                     </TouchableOpacity>
                 </View>
 
-                {/* Support & Danger Zone */}
+                {/* Legal & Policies */}
                 <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <Text style={[styles.cardTitle, { color: colors.text }]}>
-                        Support & Security
+                        Legal & Policies
                     </Text>
 
-                    <TouchableOpacity style={styles.menuItem}>
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={() => router.push('/privacy' as never)}
+                        activeOpacity={0.7}
+                    >
                         <View style={styles.menuLeft}>
-                            <HelpCircle size={20} color={colors.textSecondary} />
-                            <Text style={[styles.menuLabel, { color: colors.text }]}>Help & Support</Text>
+                            <Shield size={20} color={colors.textSecondary} />
+                            <View>
+                                <Text style={[styles.menuLabel, { color: colors.text }]}>Privacy Policy</Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    Data permissions, consent & security
+                                </Text>
+                            </View>
                         </View>
                         <ChevronRight size={20} color={colors.border} />
                     </TouchableOpacity>
+
                     <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-                    <TouchableOpacity style={styles.menuItem}>
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={() => router.push('/terms' as never)}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.menuLeft}>
+                            <FileText size={20} color={colors.textSecondary} />
+                            <View>
+                                <Text style={[styles.menuLabel, { color: colors.text }]}>Terms of Service</Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    Fair use, rules & liability limits
+                                </Text>
+                            </View>
+                        </View>
+                        <ChevronRight size={20} color={colors.border} />
+                    </TouchableOpacity>
+                </View>
+
+                {/* Account Actions */}
+                <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                    <Text style={[styles.cardTitle, { color: colors.text }]}>
+                        Account Security
+                    </Text>
+
+                    <TouchableOpacity
+                        style={styles.menuItem}
+                        onPress={handleDeleteAccount}
+                        disabled={deleting}
+                        activeOpacity={0.7}
+                    >
                         <View style={styles.menuLeft}>
                             <Trash2 size={20} color="#EF4444" />
-                            <Text style={[styles.menuLabel, { color: "#EF4444" }]}>Delete Account</Text>
+                            <View>
+                                <Text style={[styles.menuLabel, { color: "#EF4444" }]}>
+                                    {deleting ? 'Deleting Account...' : 'Delete Account'}
+                                </Text>
+                                <Text style={[styles.menuSubtext, { color: colors.textSecondary }]}>
+                                    Permanently remove your account and data
+                                </Text>
+                            </View>
                         </View>
                     </TouchableOpacity>
                 </View>
@@ -109,29 +261,30 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
         borderBottomWidth: 1,
     },
     backButton: {
-        padding: 8,
+        padding: 6,
     },
     title: {
-        fontSize: 20,
+        fontSize: 18,
         fontWeight: '700',
     },
     content: {
-        padding: 24,
-        gap: 20,
+        padding: 16,
+        gap: 16,
     },
     card: {
         padding: 20,
-        borderRadius: 12,
+        borderRadius: 14,
         borderWidth: 1,
     },
     cardTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        marginBottom: 16,
+        fontSize: 16,
+        fontWeight: '700',
+        marginBottom: 14,
     },
     settingRow: {
         flexDirection: 'row',
@@ -148,16 +301,12 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     settingLabel: {
-        fontSize: 16,
-        fontWeight: '500',
+        fontSize: 15,
+        fontWeight: '600',
     },
     settingDescription: {
-        fontSize: 14,
-        marginTop: 4,
-    },
-    placeholderText: {
-        fontSize: 14,
-        fontStyle: 'italic',
+        fontSize: 13,
+        marginTop: 2,
     },
     menuItem: {
         flexDirection: 'row',
@@ -169,9 +318,15 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
+        flex: 1,
     },
     menuLabel: {
-        fontSize: 16,
+        fontSize: 15,
+        fontWeight: '600',
+    },
+    menuSubtext: {
+        fontSize: 12,
+        marginTop: 2,
     },
     divider: {
         height: 1,
