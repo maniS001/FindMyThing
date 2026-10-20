@@ -61,18 +61,71 @@ function RootLayoutContent() {
     return () => {};
   }, [authToken]);
 
+  // Sync push token whenever authToken is present
+  useEffect(() => {
+    if (!authToken) return;
+    (async () => {
+      try {
+        const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+        let tokenToSync = expoPushToken || await AsyncStorage.getItem('expoPushToken');
+        if (!tokenToSync) {
+          tokenToSync = await registerForPushNotificationsAsync();
+          if (tokenToSync) {
+            setExpoPushToken(tokenToSync);
+            await AsyncStorage.setItem('expoPushToken', tokenToSync);
+          }
+        }
+        if (tokenToSync) {
+          await fetch(`${API_URL}/auth/update-push-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify({ pushToken: tokenToSync }),
+          });
+          console.log('[Push] Push token synced to backend successfully');
+        }
+      } catch (e) {
+        console.warn('Failed to sync push token:', e);
+      }
+    })();
+  }, [authToken, expoPushToken]);
+
+  // Global message notification listener (shows system notification drawer banner if not in that chat)
+  useEffect(() => {
+    const handleIncomingMessage = async (payload: any) => {
+      if (!payload || payload.senderId === user?.id) return;
+
+      const currentChatId = pathname.startsWith('/chat/') ? pathname.replace('/chat/', '') : null;
+      if (currentChatId === payload.conversationId) return;
+
+      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `New message from ${payload.senderName || 'Someone'}`,
+            body: payload.content || 'Sent you a message',
+            data: { url: `/chat/${payload.conversationId}` },
+            sound: true,
+            priority: Notifications.AndroidNotificationPriority.HIGH,
+          },
+          trigger: null,
+        });
+      } catch (err) {
+        console.warn('Failed to display local notification:', err);
+      }
+    };
+
+    chatService.on('CHAT_MESSAGE', handleIncomingMessage);
+    return () => chatService.off('CHAT_MESSAGE', handleIncomingMessage);
+  }, [pathname, user?.id]);
+
   useEffect(() => {
     registerForPushNotificationsAsync().then(async pushToken => {
       setExpoPushToken(pushToken ?? '');
       if (pushToken) {
-        // Save to AsyncStorage so login/signup can access it
         const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
         await AsyncStorage.setItem('expoPushToken', pushToken);
 
-        // Sync push token AND location to backend if user is already logged in
         if (authToken) {
           try {
-            // Get best available location (last known is instant, no GPS wait needed)
             let latitude: number | undefined;
             let longitude: number | undefined;
             try {

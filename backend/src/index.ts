@@ -143,12 +143,19 @@ wss.on('connection', (ws) => {
                     console.error('[Chat notification error]', notifErr);
                 }
 
-                // Push notification if recipient is offline
-                if (!hasOpenSocket) {
+                // Always send Expo Push Notification so mobile notification drawer displays it
+                try {
                     const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
                     if (recipient?.pushToken) {
-                        await sendPushNotification(recipient.pushToken, `New message from ${senderUser?.name}`, content, { url: `/chat/${conversationId}` });
+                        await sendPushNotification(
+                            recipient.pushToken,
+                            `New message from ${senderUser?.name || 'Someone'}`,
+                            content.length > 100 ? content.slice(0, 97) + '...' : content,
+                            { url: `/chat/${conversationId}` }
+                        );
                     }
+                } catch (pushErr) {
+                    console.error('[Message push notification error]', pushErr);
                 }
 
             } else if (type === 'MESSAGE_DELIVERED') {

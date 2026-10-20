@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
     View, Text, TextInput, TouchableOpacity, FlatList,
-    StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator
+    StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { API_URL } from '../../constants/api';
 import chatService, { WSPayload } from '../../services/chatService';
+import soundEffects from '../../utils/soundEffects';
 
 interface Message {
     id: string;
@@ -48,23 +49,45 @@ export default function ChatScreen() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [text, setText] = useState('');
     const [loading, setLoading] = useState(true);
-    const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
     const flatListRef = useRef<FlatList>(null);
+    const inputRef = useRef<TextInput>(null);
 
-    // Dynamic viewport height on mobile web to keep input above virtual keyboard
+    // Native keyboard listener (iOS & Android)
+    useEffect(() => {
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+        const showSub = Keyboard.addListener(showEvent, (e) => {
+            setKeyboardHeight(e.endCoordinates.height);
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+        });
+        const hideSub = Keyboard.addListener(hideEvent, () => {
+            setKeyboardHeight(0);
+        });
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
+
+    // Mobile Web virtual keyboard listener (Chrome & Safari on Android/iOS)
     useEffect(() => {
         if (Platform.OS === 'web' && typeof window !== 'undefined' && window.visualViewport) {
-            const handleResize = () => {
+            const handleViewportChange = () => {
                 if (window.visualViewport) {
-                    setViewportHeight(window.visualViewport.height);
-                    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+                    const diff = window.innerHeight - window.visualViewport.height;
+                    // If height decreased by more than 80px, the soft keyboard is open
+                    setKeyboardHeight(diff > 80 ? diff : 0);
+                    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
                 }
             };
-            window.visualViewport.addEventListener('resize', handleResize);
-            window.visualViewport.addEventListener('scroll', handleResize);
+            window.visualViewport.addEventListener('resize', handleViewportChange);
+            window.visualViewport.addEventListener('scroll', handleViewportChange);
             return () => {
-                window.visualViewport?.removeEventListener('resize', handleResize);
-                window.visualViewport?.removeEventListener('scroll', handleResize);
+                window.visualViewport?.removeEventListener('resize', handleViewportChange);
+                window.visualViewport?.removeEventListener('scroll', handleViewportChange);
             };
         }
     }, []);
@@ -85,9 +108,8 @@ export default function ChatScreen() {
                         senderName: m.sender?.name || 'Unknown',
                         createdAt: m.createdAt,
                         read: m.read,
-                        delivered: m.read || true // If in DB, it was stored
+                        delivered: m.read || true
                     })));
-                    // Inform other party that messages are read
                     chatService.sendReadReceipt(conversationId);
                 }
             })
@@ -100,7 +122,6 @@ export default function ChatScreen() {
 
         setMessages(prev => {
             const isMine = payload.senderId === user?.id;
-            // Remove optimistic pending duplicate if exists
             const filtered = prev.filter(m => !m.pending || m.content !== payload.content);
             return [...filtered, {
                 id: payload.messageId || Date.now().toString(),
@@ -113,7 +134,6 @@ export default function ChatScreen() {
             }];
         });
 
-        // If from the other user, acknowledge delivered & read immediately
         if (payload.senderId !== user?.id) {
             if (payload.messageId) {
                 chatService.sendDeliveryReceipt(conversationId, payload.messageId);
@@ -155,7 +175,6 @@ export default function ChatScreen() {
         const content = text.trim();
         setText('');
 
-        // Optimistic UI
         const optimistic: Message = {
             id: `pending-${Date.now()}`,
             content,
@@ -173,7 +192,11 @@ export default function ChatScreen() {
     };
 
     const startCall = () => {
-        (router as any).push({ pathname: '/call/[conversationId]', params: { conversationId, otherName, isInitiator: 'true' } });
+        soundEffects.startRingback();
+        (router as any).push({
+            pathname: '/call/[conversationId]',
+            params: { conversationId, otherName, isInitiator: 'true' }
+        });
     };
 
     const renderMessage = ({ item, index }: { item: Message; index: number }) => {
@@ -209,19 +232,16 @@ export default function ChatScreen() {
                                 {formatMessageTime(item.createdAt)}
                             </Text>
 
-                            {/* WhatsApp style delivery & read receipt ticks for sender */}
+                            {/* Status ticks for sender */}
                             {isMine && (
                                 <View style={styles.tickContainer}>
                                     {item.pending ? (
                                         <Clock size={11} color="rgba(255,255,255,0.7)" />
                                     ) : item.read ? (
-                                        // Double blue tick (read by recipient)
                                         <CheckCheck size={14} color="#60A5FA" />
                                     ) : item.delivered ? (
-                                        // Double grey tick (delivered)
                                         <CheckCheck size={14} color="rgba(255,255,255,0.75)" />
                                     ) : (
-                                        // Single grey tick (sent to server)
                                         <Check size={13} color="rgba(255,255,255,0.75)" />
                                     )}
                                 </View>
@@ -233,78 +253,81 @@ export default function ChatScreen() {
         );
     };
 
-    const containerStyle = Platform.OS === 'web' && viewportHeight
-        ? [styles.container, { height: viewportHeight, maxHeight: viewportHeight, backgroundColor: colors.background }]
-        : [styles.container, { backgroundColor: colors.background }];
-
     return (
-        <SafeAreaView style={containerStyle} edges={['top', 'bottom']}>
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
-            >
-                {/* Header */}
-                <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
-                    <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
-                        <ArrowLeft size={22} color={colors.text} />
-                    </TouchableOpacity>
-                    <View style={styles.headerAvatar}>
-                        <Text style={styles.headerAvatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
-                    </View>
-                    <Text style={[styles.headerName, { color: colors.text }]} numberOfLines={1}>{otherName || 'Chat'}</Text>
-                    <View style={{ flex: 1 }} />
-                    <TouchableOpacity style={[styles.callBtn, { backgroundColor: colors.primary + '20' }]} onPress={startCall}>
-                        <Phone size={20} color={colors.primary} />
-                    </TouchableOpacity>
+        <SafeAreaView
+            style={[styles.container, { backgroundColor: colors.background }]}
+            edges={keyboardHeight > 0 ? ['top'] : ['top', 'bottom']}
+        >
+            {/* Header */}
+            <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+                <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}>
+                    <ArrowLeft size={22} color={colors.text} />
+                </TouchableOpacity>
+                <View style={styles.headerAvatar}>
+                    <Text style={styles.headerAvatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
                 </View>
+                <Text style={[styles.headerName, { color: colors.text }]} numberOfLines={1}>{otherName || 'Chat'}</Text>
+                <View style={{ flex: 1 }} />
+                <TouchableOpacity style={[styles.callBtn, { backgroundColor: colors.primary + '20' }]} onPress={startCall}>
+                    <Phone size={20} color={colors.primary} />
+                </TouchableOpacity>
+            </View>
 
-                {/* Messages */}
-                {loading ? (
-                    <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
-                ) : (
-                    <FlatList
-                        ref={flatListRef}
-                        data={messages}
-                        keyExtractor={m => m.id}
-                        renderItem={renderMessage}
-                        contentContainerStyle={styles.list}
-                        onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
-                        ListEmptyComponent={
-                            <View style={styles.emptyContainer}>
-                                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                                    No messages yet. Say hi! 👋
-                                </Text>
-                            </View>
-                        }
-                    />
-                )}
+            {/* Messages List */}
+            {loading ? (
+                <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
+            ) : (
+                <FlatList
+                    ref={flatListRef}
+                    data={messages}
+                    keyExtractor={m => m.id}
+                    renderItem={renderMessage}
+                    contentContainerStyle={styles.list}
+                    onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                No messages yet. Say hi! 👋
+                            </Text>
+                        </View>
+                    }
+                />
+            )}
 
-                {/* Input Bar */}
-                <View style={[styles.inputBar, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
-                    <TextInput
-                        style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-                        value={text}
-                        onChangeText={setText}
-                        placeholder="Type a message..."
-                        placeholderTextColor={colors.textSecondary}
-                        multiline
-                        maxLength={1000}
-                        returnKeyType="send"
-                        onFocus={() => {
-                            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
-                        }}
-                        onSubmitEditing={sendMessage}
-                    />
-                    <TouchableOpacity
-                        style={[styles.sendBtn, { backgroundColor: text.trim() ? colors.primary : colors.border }]}
-                        onPress={sendMessage}
-                        disabled={!text.trim()}
-                    >
-                        <Send size={20} color="#FFF" />
-                    </TouchableOpacity>
-                </View>
-            </KeyboardAvoidingView>
+            {/* Input Bar (pushed above virtual keyboard) */}
+            <View style={[
+                styles.inputBar,
+                { backgroundColor: colors.surface, borderTopColor: colors.border },
+                keyboardHeight > 0 && { marginBottom: keyboardHeight }
+            ]}>
+                <TextInput
+                    ref={inputRef}
+                    style={[styles.input, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+                    value={text}
+                    onChangeText={setText}
+                    placeholder="Type a message..."
+                    placeholderTextColor={colors.textSecondary}
+                    multiline
+                    maxLength={1000}
+                    returnKeyType="send"
+                    onFocus={() => {
+                        setTimeout(() => {
+                            flatListRef.current?.scrollToEnd({ animated: true });
+                            if (Platform.OS === 'web' && inputRef.current) {
+                                (inputRef.current as any)?.scrollIntoView?.({ behavior: 'smooth', block: 'end' });
+                            }
+                        }, 150);
+                    }}
+                    onSubmitEditing={sendMessage}
+                />
+                <TouchableOpacity
+                    style={[styles.sendBtn, { backgroundColor: text.trim() ? colors.primary : colors.border }]}
+                    onPress={sendMessage}
+                    disabled={!text.trim()}
+                >
+                    <Send size={20} color="#FFF" />
+                </TouchableOpacity>
+            </View>
         </SafeAreaView>
     );
 }

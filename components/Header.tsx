@@ -110,19 +110,6 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
                         </TouchableOpacity>
                     )}
 
-                    {/* Messages Button */}
-                    <TouchableOpacity
-                        onPress={() => {
-                            if (pathname !== '/chat') {
-                                router.push('/chat' as never);
-                            }
-                        }}
-                        style={[styles.iconButton, { backgroundColor: 'rgba(255, 255, 255, 0.2)' }]}
-                        activeOpacity={0.7}
-                    >
-                        <MessageCircle size={20} color={colors.headerText} />
-                    </TouchableOpacity>
-
                     {/* Notification Button */}
                     <TouchableOpacity
                         onPress={() => {

@@ -1,12 +1,59 @@
-// Synthesized audio ringtones using Web Audio API (zero external assets, instant playback)
+// Robust Sound Effects Service for Web and Mobile
 
 class SoundEffectsService {
     private audioCtx: AudioContext | null = null;
-    private ringbackTimer: any = null;
-    private ringtoneTimer: any = null;
+    private ringbackAudio: HTMLAudioElement | null = null;
+    private ringtoneAudio: HTMLAudioElement | null = null;
     private isRingbackPlaying = false;
     private isRingtonePlaying = false;
-    private activeGainNodes: GainNode[] = [];
+    private ringbackTimer: any = null;
+    private ringtoneTimer: any = null;
+    private isUnlocked = false;
+
+    constructor() {
+        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+            // One-time gesture listener to unlock AudioContext & HTMLAudio on mobile browsers
+            const unlock = () => {
+                this.unlockAudio();
+                document.removeEventListener('touchstart', unlock, true);
+                document.removeEventListener('touchend', unlock, true);
+                document.removeEventListener('click', unlock, true);
+            };
+            document.addEventListener('touchstart', unlock, true);
+            document.addEventListener('touchend', unlock, true);
+            document.addEventListener('click', unlock, true);
+        }
+    }
+
+    /**
+     * Proactively unlocks audio on the first user interaction
+     */
+    unlockAudio() {
+        if (typeof window === 'undefined') return;
+        this.isUnlocked = true;
+
+        // 1. Unlock Web Audio Context
+        try {
+            const ctx = this.getAudioContext();
+            if (ctx && ctx.state === 'suspended') {
+                ctx.resume().catch(() => {});
+            }
+        } catch {}
+
+        // 2. Pre-create HTMLAudio elements
+        try {
+            if (!this.ringbackAudio) {
+                this.ringbackAudio = new Audio('/sounds/ringback.wav');
+                this.ringbackAudio.loop = true;
+                this.ringbackAudio.preload = 'auto';
+            }
+            if (!this.ringtoneAudio) {
+                this.ringtoneAudio = new Audio('/sounds/ringtone.wav');
+                this.ringtoneAudio.loop = true;
+                this.ringtoneAudio.preload = 'auto';
+            }
+        } catch {}
+    }
 
     private getAudioContext(): AudioContext | null {
         if (typeof window === 'undefined') return null;
@@ -16,27 +63,54 @@ class SoundEffectsService {
                 this.audioCtx = new AudioContextClass();
             }
         }
-        if (this.audioCtx && this.audioCtx.state === 'suspended') {
-            this.audioCtx.resume().catch(() => {});
-        }
         return this.audioCtx;
     }
 
     /**
-     * Standard telephone ringback tone for caller side
-     * 440 Hz + 480 Hz dual-frequency tone (standard North American / Indian ringback)
-     * Cadence: 1.5s tone, 3.5s silence
+     * Start playing standard telephone ringback tone for caller side
      */
-    startRingback() {
+    async startRingback() {
         if (this.isRingbackPlaying) return;
         this.stopAll();
         this.isRingbackPlaying = true;
 
+        // Method 1: HTML5 Audio element (most reliable for loop playback on mobile browsers)
+        if (typeof window !== 'undefined') {
+            try {
+                if (!this.ringbackAudio) {
+                    this.ringbackAudio = new Audio('/sounds/ringback.wav');
+                    this.ringbackAudio.loop = true;
+                }
+                this.ringbackAudio.currentTime = 0;
+                const playPromise = this.ringbackAudio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(err => {
+                        console.warn('[SoundEffects] HTMLAudio ringback blocked, falling back to WebAudio synth:', err);
+                        this.playRingbackSynth();
+                    });
+                }
+                return;
+            } catch {
+                // fallback to synth
+            }
+        }
+
+        // Method 2: Web Audio Synthesizer fallback
+        this.playRingbackSynth();
+    }
+
+    private async playRingbackSynth() {
+        const ctx = this.getAudioContext();
+        if (!ctx) return;
+
+        try {
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+        } catch {}
+
         const playTone = () => {
             if (!this.isRingbackPlaying) return;
-            const ctx = this.getAudioContext();
-            if (!ctx) return;
-
             try {
                 const now = ctx.currentTime;
                 const osc1 = ctx.createOscillator();
@@ -48,68 +122,97 @@ class SoundEffectsService {
                 osc1.frequency.setValueAtTime(440, now);
                 osc2.frequency.setValueAtTime(480, now);
 
-                // Smooth fade-in and fade-out to prevent clicks
                 gain.gain.setValueAtTime(0, now);
-                gain.gain.linearRampToValueAtTime(0.12, now + 0.05);
-                gain.gain.setValueAtTime(0.12, now + 1.4);
-                gain.gain.linearRampToValueAtTime(0, now + 1.5);
+                gain.gain.linearRampToValueAtTime(0.15, now + 0.05);
+                gain.gain.setValueAtTime(0.15, now + 1.8);
+                gain.gain.linearRampToValueAtTime(0, now + 2.0);
 
                 osc1.connect(gain);
                 osc2.connect(gain);
                 gain.connect(ctx.destination);
 
-                this.activeGainNodes.push(gain);
-
                 osc1.start(now);
                 osc2.start(now);
-                osc1.stop(now + 1.55);
-                osc2.stop(now + 1.55);
-
-                osc1.onended = () => {
-                    this.activeGainNodes = this.activeGainNodes.filter(g => g !== gain);
-                };
+                osc1.stop(now + 2.0);
+                osc2.stop(now + 2.0);
             } catch (err) {
-                console.warn('[SoundEffects] ringback error:', err);
+                console.warn('[SoundEffects] Synth error:', err);
             }
         };
 
         playTone();
-        this.ringbackTimer = setInterval(playTone, 4500);
+        this.ringbackTimer = setInterval(playTone, 4000);
     }
 
     stopRingback() {
         this.isRingbackPlaying = false;
+        if (this.ringbackAudio) {
+            try {
+                this.ringbackAudio.pause();
+                this.ringbackAudio.currentTime = 0;
+            } catch {}
+        }
         if (this.ringbackTimer) {
             clearInterval(this.ringbackTimer);
             this.ringbackTimer = null;
         }
-        this.muteActiveGainNodes();
     }
 
     /**
-     * Melodic incoming call ringtone for receiver side
-     * Pleasant chime notes (C5, E5, G5, B5, C6) repeating smoothly
+     * Start playing melodic incoming call ringtone on receiver side
      */
-    startRingtone() {
+    async startRingtone() {
         if (this.isRingtonePlaying) return;
         this.stopAll();
         this.isRingtonePlaying = true;
 
+        // Method 1: HTML5 Audio element
+        if (typeof window !== 'undefined') {
+            try {
+                if (!this.ringtoneAudio) {
+                    this.ringtoneAudio = new Audio('/sounds/ringtone.wav');
+                    this.ringtoneAudio.loop = true;
+                }
+                this.ringtoneAudio.currentTime = 0;
+                const playPromise = this.ringtoneAudio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(err => {
+                        console.warn('[SoundEffects] HTMLAudio ringtone blocked, falling back to WebAudio synth:', err);
+                        this.playRingtoneSynth();
+                    });
+                }
+                return;
+            } catch {
+                // fallback to synth
+            }
+        }
+
+        // Method 2: Web Audio Synthesizer fallback
+        this.playRingtoneSynth();
+    }
+
+    private async playRingtoneSynth() {
+        const ctx = this.getAudioContext();
+        if (!ctx) return;
+
+        try {
+            if (ctx.state === 'suspended') {
+                await ctx.resume();
+            }
+        } catch {}
+
         const notes = [
-            { freq: 523.25, time: 0.0, dur: 0.18 }, // C5
-            { freq: 659.25, time: 0.15, dur: 0.18 }, // E5
-            { freq: 783.99, time: 0.30, dur: 0.18 }, // G5
-            { freq: 987.77, time: 0.45, dur: 0.25 }, // B5
-            { freq: 1046.50, time: 0.70, dur: 0.40 }, // C6
-            { freq: 783.99, time: 1.15, dur: 0.18 }, // G5
-            { freq: 1046.50, time: 1.30, dur: 0.50 }, // C6
+            { freq: 523.25, time: 0.0, dur: 0.2 },
+            { freq: 659.25, time: 0.2, dur: 0.2 },
+            { freq: 783.99, time: 0.4, dur: 0.2 },
+            { freq: 987.77, time: 0.6, dur: 0.28 },
+            { freq: 1046.50, time: 0.9, dur: 0.45 },
+            { freq: 783.99, time: 1.45, dur: 0.2 },
+            { freq: 1046.50, time: 1.65, dur: 0.55 },
         ];
 
         const playMelody = () => {
             if (!this.isRingtonePlaying) return;
-            const ctx = this.getAudioContext();
-            if (!ctx) return;
-
             try {
                 const baseTime = ctx.currentTime;
                 notes.forEach(({ freq, time, dur }) => {
@@ -121,53 +224,41 @@ class SoundEffectsService {
                     osc.frequency.setValueAtTime(freq, baseTime + time);
 
                     gain.gain.setValueAtTime(0, baseTime + time);
-                    gain.gain.linearRampToValueAtTime(0.2, baseTime + time + 0.02);
+                    gain.gain.linearRampToValueAtTime(0.25, baseTime + time + 0.02);
                     gain.gain.exponentialRampToValueAtTime(0.001, baseTime + time + dur);
 
                     osc.connect(gain);
                     gain.connect(ctx.destination);
-                    this.activeGainNodes.push(gain);
 
                     osc.start(baseTime + time);
                     osc.stop(baseTime + time + dur + 0.05);
-
-                    osc.onended = () => {
-                        this.activeGainNodes = this.activeGainNodes.filter(g => g !== gain);
-                    };
                 });
             } catch (err) {
-                console.warn('[SoundEffects] ringtone error:', err);
+                console.warn('[SoundEffects] Synth ringtone error:', err);
             }
         };
 
         playMelody();
-        this.ringtoneTimer = setInterval(playMelody, 2600);
+        this.ringtoneTimer = setInterval(playMelody, 2800);
     }
 
     stopRingtone() {
         this.isRingtonePlaying = false;
+        if (this.ringtoneAudio) {
+            try {
+                this.ringtoneAudio.pause();
+                this.ringtoneAudio.currentTime = 0;
+            } catch {}
+        }
         if (this.ringtoneTimer) {
             clearInterval(this.ringtoneTimer);
             this.ringtoneTimer = null;
         }
-        this.muteActiveGainNodes();
     }
 
     stopAll() {
         this.stopRingback();
         this.stopRingtone();
-    }
-
-    private muteActiveGainNodes() {
-        const ctx = this.audioCtx;
-        if (!ctx) return;
-        this.activeGainNodes.forEach(gain => {
-            try {
-                gain.gain.cancelScheduledValues(ctx.currentTime);
-                gain.gain.setValueAtTime(0, ctx.currentTime);
-            } catch {}
-        });
-        this.activeGainNodes = [];
     }
 }
 

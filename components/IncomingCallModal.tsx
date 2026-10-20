@@ -78,7 +78,7 @@ export default function IncomingCallModal() {
 
     return (
         <Modal transparent animationType="slide" visible>
-            <View style={styles.overlay}>
+            <View style={styles.overlay} onTouchStart={() => soundEffects.startRingtone()}>
                 <View style={styles.card}>
                     <View style={styles.avatar}>
                         <Text style={styles.avatarText}>{(incoming.senderName || '?')[0].toUpperCase()}</Text>
