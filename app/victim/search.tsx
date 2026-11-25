@@ -6,6 +6,7 @@ import Button from '../../components/Button';
 import CategoryPicker from '../../components/CategoryPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
+import ContactPhoneCard from '../../components/ContactPhoneCard';
 import Input from '../../components/Input';
 import LocationPicker from '../../components/LocationPicker';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -26,7 +27,8 @@ export default function SearchLostItem() {
         imageUris: [] as string[],
     });
     const [locationCoords, setLocationCoords] = useState<{ lat: number; lon: number } | null>(null);
-    const [errors, setErrors] = useState({ name: '', location: '', contactInfo: '' });
+    const [exposePhoneNumber, setExposePhoneNumber] = useState(false);
+    const [errors, setErrors] = useState({ name: '', location: '' });
     const [date, setDate] = useState(new Date());
     const [aiLoading, setAiLoading] = useState(false);
     const [aiFeedback, setAiFeedback] = useState<{ issues: string[]; suggestions: string[] } | null>(null);
@@ -39,7 +41,7 @@ export default function SearchLostItem() {
     const [comms, setComms] = useState<any[]>([]);
     const [orgs, setOrgs] = useState<any[]>([]);
     const [notificationType, setNotificationType] = useState<'RADIUS' | 'COMMUNITY' | 'ORGANIZATION'>('RADIUS');
-    const [notifyRadius, setNotifyRadius] = useState('1');
+    const [notifyRadius, setNotifyRadius] = useState('5');
     const [selectedCommunity, setSelectedCommunity] = useState<any | null>(null);
     const [selectedOrg, setSelectedOrg] = useState<any | null>(null);
 
@@ -89,10 +91,9 @@ export default function SearchLostItem() {
         const newErrors = {
             name: !form.name ? 'Item name is required' : '',
             location: !form.location ? 'Location is required' : '',
-            contactInfo: !form.contactInfo ? 'Contact info is required' : '',
         };
         setErrors(newErrors);
-        if (newErrors.name || newErrors.location || newErrors.contactInfo) return;
+        if (newErrors.name || newErrors.location) return;
 
         if (notificationType === 'COMMUNITY' && !selectedCommunity) {
             Alert.alert('Select Community', 'Please select a community to notify.');
@@ -142,6 +143,7 @@ export default function SearchLostItem() {
             pathname: '/victim/results',
             params: {
                 ...form,
+                exposePhoneNumber: exposePhoneNumber && form.contactInfo.trim() ? 'true' : 'false',
                 latitude: locationCoords ? String(locationCoords.lat) : '',
                 longitude: locationCoords ? String(locationCoords.lon) : '',
                 date: date.toISOString().split('T')[0],
@@ -225,16 +227,11 @@ export default function SearchLostItem() {
                             numberOfLines={5}
                         />
 
-                        <Input
-                            label="Your Contact Info *"
-                            placeholder="Phone Number"
-                            value={form.contactInfo}
-                            onChangeText={(text) => {
-                                setForm({ ...form, contactInfo: text });
-                                if (errors.contactInfo) setErrors({ ...errors, contactInfo: '' });
-                            }}
-                            keyboardType="phone-pad"
-                            error={errors.contactInfo}
+                        <ContactPhoneCard
+                            phone={form.contactInfo}
+                            onChangePhone={(text) => setForm({ ...form, contactInfo: text })}
+                            exposePhone={exposePhoneNumber}
+                            onToggleExpose={setExposePhoneNumber}
                         />
 
                         <CustomImagePicker

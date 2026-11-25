@@ -1,170 +1,271 @@
 import { DarkTheme, DefaultTheme, ThemeProvider as NavigationThemeProvider } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import { Stack, usePathname } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { View, Platform } from 'react-native';
+import { Stack, usePathname, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Platform, View } from 'react-native';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import Header from '../components/Header';
-import WebContainer from '../components/WebContainer';
-import { AuthProvider, useAuth } from '../contexts/AuthContext';
-import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
-import { API_URL } from '../constants/api';
-import { registerForPushNotificationsAsync } from '../utils/pushNotifications';
-import * as Location from 'expo-location';
-import chatService from '../services/chatService';
-import IncomingCallModal from '../components/IncomingCallModal';
 import ActiveCallBanner from '../components/ActiveCallBanner';
+import Header from '../components/Header';
+import IncomingCallModal from '../components/IncomingCallModal';
+import { API_URL } from '../constants/api';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import { CallProvider } from '../contexts/CallContext';
+import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
+import chatService from '../services/chatService';
+import { registerForPushNotificationsAsync } from '../utils/pushNotifications';
+import soundEffects from '../utils/soundEffects';
 
-// Configure notification handler
+// Configure foreground notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 });
 
 function RootLayoutContent() {
   const { theme, colors } = useTheme();
   const pathname = usePathname();
+  const router = useRouter();
 
   const [expoPushToken, setExpoPushToken] = useState('');
-  const [notification, setNotification] = useState<Notifications.Notification | undefined>(undefined);
   const lastNotificationResponse = Notifications.useLastNotificationResponse();
-  
-  useEffect(() => {
-    if (
-      lastNotificationResponse &&
-      lastNotificationResponse.notification.request.content.data?.url &&
-      lastNotificationResponse.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER
-    ) {
-      const url = lastNotificationResponse.notification.request.content.data.url as string;
-      const { router } = require('expo-router');
-      router.push(url);
-    }
-  }, [lastNotificationResponse]);
   const notificationListener = useRef<Notifications.Subscription | null>(null);
   const responseListener = useRef<Notifications.Subscription | null>(null);
+  const handledResponseIdRef = useRef<string | null>(null);
 
   const { user, token: authToken } = useAuth();
 
-  // Connect/disconnect WebSocket when auth changes
-  useEffect(() => {
-    if (authToken) {
-      chatService.connect();
-    } else {
-      chatService.disconnect();
-    }
-    return () => {};
-  }, [authToken]);
+  // Route or handle notification response (works for both cold-start closed app and background resume)
+  const handleNotificationResponse = useCallback(async (response: Notifications.NotificationResponse) => {
+    try {
+      const reqId = response.notification.request.identifier;
+      const actionId = response.actionIdentifier;
+      const dedupeKey = `${reqId}:${actionId}`;
+      if (handledResponseIdRef.current === dedupeKey) return;
+      handledResponseIdRef.current = dedupeKey;
 
-  // Sync push token whenever authToken is present
-  useEffect(() => {
-    if (!authToken) return;
-    (async () => {
-      try {
-        const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-        let tokenToSync = expoPushToken || await AsyncStorage.getItem('expoPushToken');
-        if (!tokenToSync) {
-          tokenToSync = await registerForPushNotificationsAsync();
-          if (tokenToSync) {
-            setExpoPushToken(tokenToSync);
-            await AsyncStorage.setItem('expoPushToken', tokenToSync);
-          }
-        }
-        if (tokenToSync) {
-          await fetch(`${API_URL}/auth/update-push-token`, {
+      const data: any = response.notification.request.content.data || {};
+
+      if (actionId === 'decline_call' && data.conversationId) {
+        soundEffects.stopRingtone();
+        chatService.rejectCall(data.conversationId);
+        const token = await AsyncStorage.getItem('token');
+        if (token && data.callRequestId) {
+          await fetch(`${API_URL}/calls/${data.callRequestId}/reject`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-            body: JSON.stringify({ pushToken: tokenToSync }),
-          });
-          console.log('[Push] Push token synced to backend successfully');
+            headers: { Authorization: `Bearer ${token}` },
+          }).catch(() => {});
         }
-      } catch (e) {
-        console.warn('Failed to sync push token:', e);
+        return;
       }
-    })();
-  }, [authToken, expoPushToken]);
 
-  // Global message notification listener (shows system notification drawer banner if not in that chat)
+      if (data.type === 'INCOMING_CALL' && data.conversationId) {
+        soundEffects.stopRingtone();
+        (router as any).push({
+          pathname: '/call/[conversationId]',
+          params: {
+            conversationId: String(data.conversationId),
+            otherName: String(data.senderName || 'Caller'),
+            isInitiator: 'false',
+            callRequestId: data.callRequestId ? String(data.callRequestId) : '',
+            autoAccept: actionId === 'answer_call' ? 'true' : 'false',
+          },
+        });
+        return;
+      }
+
+      if (typeof data.url === 'string' && data.url.length > 0) {
+        router.push(data.url as never);
+      }
+    } catch (err) {
+      console.warn('Error handling notification response:', err);
+    }
+  }, [router]);
+
   useEffect(() => {
-    const handleIncomingMessage = async (payload: any) => {
-      if (!payload || payload.senderId === user?.id) return;
+    if (lastNotificationResponse) {
+      handleNotificationResponse(lastNotificationResponse);
+    }
+  }, [lastNotificationResponse, handleNotificationResponse]);
 
-      const currentChatId = pathname.startsWith('/chat/') ? pathname.replace('/chat/', '') : null;
-      if (currentChatId === payload.conversationId) return;
+  // Helper to obtain device GPS on both Native & Web cleanly
+  const fetchCurrentCoords = useCallback(async (): Promise<{ latitude?: number; longitude?: number }> => {
+    try {
+      if (Platform.OS === 'web') {
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
+          return await new Promise((resolve) => {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+              () => resolve({}),
+              { enableHighAccuracy: false, timeout: 6000, maximumAge: 60000 }
+            );
+          });
+        }
+        return {};
+      }
+
+      const { status: existing } = await Location.getForegroundPermissionsAsync();
+      let finalStatus = existing;
+      if (existing !== 'granted') {
+        const req = await Location.requestForegroundPermissionsAsync();
+        finalStatus = req.status;
+      }
+      if (finalStatus === 'granted') {
+        const loc =
+          (await Location.getLastKnownPositionAsync({})) ||
+          (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
+        if (loc) {
+          return { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+        }
+      }
+    } catch (locErr) {
+      console.warn('Location fetch failed:', locErr);
+    }
+    return {};
+  }, []);
+
+  // Sync push token & current GPS whenever authToken changes or app resumes foreground
+  const syncPushTokenAndLocation = useCallback(async (tokenStr: string) => {
+    try {
+      let pushToken = expoPushToken || (await AsyncStorage.getItem('expoPushToken')) || '';
+      if (!pushToken) {
+        const freshToken = await registerForPushNotificationsAsync();
+        if (freshToken) {
+          pushToken = freshToken;
+          setExpoPushToken(freshToken);
+          await AsyncStorage.setItem('expoPushToken', freshToken);
+        }
+      }
+
+      const { latitude, longitude } = await fetchCurrentCoords();
+
+      if (pushToken || (latitude !== undefined && longitude !== undefined)) {
+        await fetch(`${API_URL}/auth/update-push-token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${tokenStr}`,
+          },
+          body: JSON.stringify({
+            ...(pushToken ? { pushToken } : {}),
+            ...(latitude !== undefined && longitude !== undefined ? { latitude, longitude } : {}),
+          }),
+        });
+        console.log('[Sync] Push token / GPS synced to backend');
+      }
+    } catch (e) {
+      console.warn('[Sync] Failed to sync push token & location:', e);
+    }
+  }, [expoPushToken, fetchCurrentCoords]);
+
+  // Connect WebSocket & sync token + location when authenticated
+  useEffect(() => {
+    if (!authToken) {
+      chatService.disconnect();
+      return;
+    }
+    chatService.connect();
+    syncPushTokenAndLocation(authToken);
+
+    let sub: any = null;
+    if (Platform.OS !== 'web') {
+      sub = AppState.addEventListener('change', (state) => {
+        if (state === 'active') {
+          chatService.connect();
+          syncPushTokenAndLocation(authToken);
+        }
+      });
+    }
+    return () => sub?.remove?.();
+  }, [authToken, syncPushTokenAndLocation]);
+
+  // Global message & alert notification listener via WebSocket
+  useEffect(() => {
+    const showLocalOrBrowserNotification = async (title: string, body: string, data: any) => {
+      if (Platform.OS === 'web') {
+        try {
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            const notif = new Notification(title, { body, icon: '/icon.png' });
+            notif.onclick = () => {
+              window.focus();
+              if (data?.url) router.push(data.url);
+            };
+          }
+        } catch {}
+        return;
+      }
 
       try {
         await Notifications.scheduleNotificationAsync({
           content: {
-            title: `New message from ${payload.senderName || 'Someone'}`,
-            body: payload.content || 'Sent you a message',
-            data: { url: `/chat/${payload.conversationId}` },
-            sound: true,
+            title,
+            body,
+            data,
+            sound: 'default',
             priority: Notifications.AndroidNotificationPriority.HIGH,
           },
-          trigger: null,
+          trigger: Platform.OS === 'android' ? { channelId: 'default' } : null,
         });
       } catch (err) {
         console.warn('Failed to display local notification:', err);
       }
     };
 
+    const handleIncomingMessage = async (payload: any) => {
+      if (!payload || payload.senderId === user?.id) return;
+      const currentChatId = pathname.startsWith('/chat/') ? pathname.replace('/chat/', '') : null;
+      if (currentChatId === payload.conversationId) return;
+
+      await showLocalOrBrowserNotification(
+        `New message from ${payload.senderName || 'Someone'}`,
+        payload.content || 'Sent you a message',
+        { url: `/chat/${payload.conversationId}` }
+      );
+    };
+
+    const handleNewNotification = async (payload: any) => {
+      if (!payload) return;
+      await showLocalOrBrowserNotification(
+        payload.title || 'New Alert',
+        payload.message || 'Tap to view details',
+        { url: payload.url || '/notifications' }
+      );
+    };
+
     chatService.on('CHAT_MESSAGE', handleIncomingMessage);
-    return () => chatService.off('CHAT_MESSAGE', handleIncomingMessage);
-  }, [pathname, user?.id]);
+    chatService.on('NEW_NOTIFICATION', handleNewNotification);
+    return () => {
+      chatService.off('CHAT_MESSAGE', handleIncomingMessage);
+      chatService.off('NEW_NOTIFICATION', handleNewNotification);
+    };
+  }, [pathname, user?.id, router]);
 
+  // Register push notifications & notification listeners once on mount
   useEffect(() => {
-    registerForPushNotificationsAsync().then(async pushToken => {
-      setExpoPushToken(pushToken ?? '');
+    registerForPushNotificationsAsync().then(async (pushToken) => {
       if (pushToken) {
-        const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+        setExpoPushToken(pushToken);
         await AsyncStorage.setItem('expoPushToken', pushToken);
-
-        if (authToken) {
-          try {
-            let latitude: number | undefined;
-            let longitude: number | undefined;
-            try {
-              const { status } = await Location.requestForegroundPermissionsAsync();
-              if (status === 'granted') {
-                const loc = await Location.getLastKnownPositionAsync({}) ||
-                            await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                if (loc) {
-                  latitude = loc.coords.latitude;
-                  longitude = loc.coords.longitude;
-                }
-              }
-            } catch (locErr) {
-              console.warn('Location fetch failed:', locErr);
-            }
-
-            await fetch(`${API_URL}/auth/update-push-token`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-              body: JSON.stringify({ pushToken, latitude, longitude }),
-            });
-          } catch (e) {
-            console.warn('Failed to sync push token to backend:', e);
-          }
-        }
       }
     });
 
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      setNotification(notification);
+    notificationListener.current = Notifications.addNotificationReceivedListener((notif) => {
+      const data: any = notif.request.content.data || {};
+      if (data.type === 'INCOMING_CALL' && Platform.OS !== 'web') {
+        soundEffects.startRingtone();
+      }
     });
 
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('Notification tapped:', response);
-      const url = response.notification.request.content.data?.url;
-      if (url && typeof url === 'string') {
-        const { router } = require('expo-router');
-        router.push(url);
-      }
+    responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
+      handleNotificationResponse(response);
     });
 
     return () => {
@@ -175,7 +276,7 @@ function RootLayoutContent() {
         Notifications.removeNotificationSubscription(responseListener.current);
       }
     };
-  }, []);
+  }, [handleNotificationResponse]);
 
   const baseTheme = theme === 'dark' ? DarkTheme : DefaultTheme;
   const navigationTheme = {
@@ -211,6 +312,10 @@ function RootLayoutContent() {
               <Stack.Screen name="account" options={{ headerShown: false }} />
               <Stack.Screen name="settings" options={{ headerShown: false }} />
               <Stack.Screen name="about" options={{ headerShown: false }} />
+              <Stack.Screen name="help" options={{ headerShown: false }} />
+              <Stack.Screen name="manual" options={{ headerShown: false }} />
+              <Stack.Screen name="privacy" options={{ headerShown: false }} />
+              <Stack.Screen name="terms" options={{ headerShown: false }} />
               <Stack.Screen name="notifications" options={{ headerShown: false }} />
               <Stack.Screen name="chat/index" options={{ headerShown: false }} />
               <Stack.Screen name="chat/[conversationId]" options={{ headerShown: false }} />

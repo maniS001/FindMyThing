@@ -7,6 +7,7 @@ import CategoryPicker from '../../components/CategoryPicker';
 import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
+import ContactPhoneCard from '../../components/ContactPhoneCard';
 import Input from '../../components/Input';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -54,12 +55,14 @@ export default function EditComplaint() {
         }
     };
 
+    const [contactInfo, setContactInfo] = useState('');
+    const [exposePhoneNumber, setExposePhoneNumber] = useState(false);
     const [form, setForm] = useState({
         name: '',
         category: '',
         location: '',
         description: '',
-                imageUris: [] as string[],
+        imageUris: [] as string[],
     });
     const [date, setDate] = useState(new Date());
     const [pickerVisible, setPickerVisible] = useState(false);
@@ -115,6 +118,8 @@ export default function EditComplaint() {
                             ? JSON.parse(data.imageUris)
                             : []),
                 });
+                setContactInfo(data.contactInfo || '');
+                setExposePhoneNumber(Boolean(data.exposePhoneNumber));
                 setDate(new Date(data.date));
 
                 if (data.targetCommunityId) {
@@ -196,7 +201,9 @@ export default function EditComplaint() {
                 location: form.location,
                 date: date.toISOString().split('T')[0],
                 description: form.description,
-                                imageUris: base64Images,
+                contactInfo: contactInfo.trim() || undefined,
+                exposePhoneNumber: Boolean(exposePhoneNumber && contactInfo.trim()),
+                imageUris: base64Images,
                 notifyRadius: notificationType === 'RADIUS' ? parseInt(notifyRadius) || 1 : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? targetCommunityId || undefined : undefined,
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? targetOrganizationId || undefined : undefined,
@@ -286,6 +293,13 @@ export default function EditComplaint() {
                             onChangeText={(text) => setForm({ ...form, description: text })}
                             multiline
                             numberOfLines={5}
+                        />
+
+                        <ContactPhoneCard
+                            phone={contactInfo}
+                            onChangePhone={setContactInfo}
+                            exposePhone={exposePhoneNumber}
+                            onToggleExpose={setExposePhoneNumber}
                         />
 
                         <CustomImagePicker

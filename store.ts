@@ -36,6 +36,7 @@ export interface Complaint {
     date: string;
     description: string;
     contactInfo?: string;
+    exposePhoneNumber?: boolean;
     imageUris?: string[];
     status: 'OPEN' | 'CLOSED' | 'RESOLVED' | 'NOTIFIED';
     createdAt: string;
@@ -292,7 +293,9 @@ export const searchComplaints = async (query: string, communityId?: string, orgI
 
 export const getComplaintById = async (id: string): Promise<Complaint | null> => {
     try {
-        const response = await fetch(`${API_URL}/complaints/${id}`);
+        const token = await AsyncStorage.getItem('token');
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+        const response = await fetch(`${API_URL}/complaints/${id}`, { headers });
         if (!response.ok) return null;
         return await response.json();
     } catch (error) {

@@ -17,6 +17,9 @@ export default function SearchResults() {
         date: string;
         description: string;
         contactInfo: string;
+        exposePhoneNumber: string;
+        latitude: string;
+        longitude: string;
         imageUris: string;
         cashPrize: string;
         notifyRadius: string;
@@ -48,8 +51,8 @@ export default function SearchResults() {
     }, [params.name]);
 
     const handleFileComplaint = async () => {
-        if (!params.name || !params.location || !params.contactInfo) {
-            Alert.alert('Missing Information', 'Please go back and fill in required fields (item name, location, contact info).');
+        if (!params.name || !params.location) {
+            Alert.alert('Missing Information', 'Please go back and fill in required fields (item name, location).');
             return;
         }
 
@@ -70,7 +73,10 @@ export default function SearchResults() {
                 location: params.location,
                 date: params.date || new Date().toISOString().split('T')[0],
                 description: params.description || '',
-                contactInfo: params.contactInfo,
+                contactInfo: params.contactInfo?.trim() || undefined,
+                exposePhoneNumber: params.exposePhoneNumber === 'true' && Boolean(params.contactInfo?.trim()),
+                latitude: params.latitude ? parseFloat(params.latitude) : undefined,
+                longitude: params.longitude ? parseFloat(params.longitude) : undefined,
                 imageUris: base64Images,
                 userId: user?.id,
                 cashPrize: params.cashPrize?.trim() || undefined,

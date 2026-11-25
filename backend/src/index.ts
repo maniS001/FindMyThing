@@ -30,6 +30,9 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 // Map userId -> Set of active WebSocket clients (supports multiple tabs / mobile reconnection)
 const wsClients = new Map<string, Set<WebSocket>>();
 
+// In-memory ICE candidate buffer per conversation/call so offline receivers answering via push get ICE candidates
+const pendingCallIceMap = new Map<string, any[]>();
+
 const wsBroadcastToUser = (userId: string, payload: object) => {
     const clients = wsClients.get(userId);
     if (clients) {
@@ -146,12 +149,12 @@ wss.on('connection', (ws) => {
                 // Always send Expo Push Notification so mobile notification drawer displays it
                 try {
                     const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
-                    if (recipient?.pushToken) {
-                        await sendPushNotification(
-                            recipient.pushToken,
+                    if (recipient) {
+                        await sendPushToUser(
+                            recipient,
                             `New message from ${senderUser?.name || 'Someone'}`,
                             content.length > 100 ? content.slice(0, 97) + '...' : content,
-                            { url: `/chat/${conversationId}` }
+                            { url: `/chat/${conversationId}`, type: 'CHAT_MESSAGE', conversationId }
                         );
                     }
                 } catch (pushErr) {
@@ -182,47 +185,93 @@ wss.on('connection', (ws) => {
                     where: { conversationId, status: 'PENDING' },
                     data: { status: 'ENDED', endedAt: new Date() }
                 });
+                pendingCallIceMap.delete(conversationId);
 
-                // Create a call record
+                // Create a call record storing the WebRTC offer SDP for offline/closed notification answer
                 const callReq = await prisma.callRequest.create({
-                    data: { conversationId, initiatorId: authenticatedUserId!, recipientId: otherUserId, status: 'PENDING' }
+                    data: {
+                        conversationId,
+                        initiatorId: authenticatedUserId!,
+                        recipientId: otherUserId,
+                        status: 'PENDING',
+                        sdp: sdp ? JSON.stringify(sdp) : null,
+                        iceCandidates: '[]',
+                    }
                 });
-                
+
+                const callerName = senderUser?.name || 'Someone';
+
                 // Broadcast to all active sockets of the recipient
-                wsBroadcastToUser(otherUserId, { type: 'CALL_INCOMING', conversationId, callRequestId: callReq.id, sdp, senderName: senderUser?.name, senderId: authenticatedUserId });
+                wsBroadcastToUser(otherUserId, {
+                    type: 'CALL_INCOMING',
+                    conversationId,
+                    callRequestId: callReq.id,
+                    sdp,
+                    senderName: callerName,
+                    senderId: authenticatedUserId
+                });
 
                 // Create persistent in-app notification in DB
                 try {
                     await prisma.notification.create({
                         data: {
                             userId: otherUserId,
-                            title: `Call from ${senderUser?.name || 'Someone'}`,
+                            title: `Call from ${callerName}`,
                             message: `Incoming call regarding your item. Tap to open.`,
-                            type: 'AREA_ALERT',
-                            payload: JSON.stringify({ conversationId, senderId: authenticatedUserId })
+                            type: 'INCOMING_CALL',
+                            payload: JSON.stringify({ conversationId, senderId: authenticatedUserId, callRequestId: callReq.id })
                         }
                     });
                 } catch {}
 
-                // Push notification for offline user
-                const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
-                if (recipient?.pushToken) {
-                    await sendPushNotification(recipient.pushToken, `Incoming call from ${senderUser?.name}`, 'Tap to answer', { url: `/call/${conversationId}` });
+                // High-priority Push Notification with common ringtone channel for background / closed app users
+                try {
+                    const recipient = await prisma.user.findUnique({ where: { id: otherUserId } });
+                    if (recipient) {
+                        const callUrl = `/call/${conversationId}?otherName=${encodeURIComponent(callerName)}&isInitiator=false&callRequestId=${encodeURIComponent(callReq.id)}`;
+                        await sendPushToUser(
+                            recipient,
+                            `📞 Incoming call from ${callerName}`,
+                            'Tap to answer your FindMyThing call',
+                            {
+                                url: callUrl,
+                                type: 'INCOMING_CALL',
+                                conversationId,
+                                callRequestId: callReq.id,
+                                senderName: callerName,
+                            },
+                            { channelId: 'calls', sound: 'ringtone.wav', categoryId: 'incoming_call' }
+                        );
+                    }
+                } catch (callPushErr) {
+                    console.error('[Call push notification error]', callPushErr);
                 }
 
             } else if (type === 'CALL_ANSWER') {
-                await prisma.callRequest.updateMany({ where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' }, data: { status: 'ACCEPTED' } });
+                await prisma.callRequest.updateMany({
+                    where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' },
+                    data: { status: 'ACCEPTED' }
+                });
                 wsBroadcastToUser(otherUserId, { type: 'CALL_ANSWER', conversationId, sdp, senderId: authenticatedUserId });
 
             } else if (type === 'ICE_CANDIDATE') {
+                if (candidate) {
+                    const list = pendingCallIceMap.get(conversationId) || [];
+                    if (list.length < 50) {
+                        list.push(candidate);
+                        pendingCallIceMap.set(conversationId, list);
+                    }
+                }
                 wsBroadcastToUser(otherUserId, { type: 'ICE_CANDIDATE', conversationId, candidate, senderId: authenticatedUserId });
 
             } else if (type === 'CALL_ENDED') {
+                pendingCallIceMap.delete(conversationId);
                 await prisma.callRequest.updateMany({ where: { conversationId, status: { in: ['PENDING', 'ACCEPTED'] } }, data: { status: 'ENDED', endedAt: new Date() } });
                 wsBroadcastToUser(otherUserId, { type: 'CALL_ENDED', conversationId });
 
             } else if (type === 'CALL_REJECTED') {
-                await prisma.callRequest.updateMany({ where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' }, data: { status: 'REJECTED' } });
+                pendingCallIceMap.delete(conversationId);
+                await prisma.callRequest.updateMany({ where: { conversationId, recipientId: authenticatedUserId, status: 'PENDING' }, data: { status: 'REJECTED', endedAt: new Date() } });
                 wsBroadcastToUser(otherUserId, { type: 'CALL_REJECTED', conversationId });
             }
 
@@ -277,29 +326,85 @@ function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: numbe
     return R * c;
 }
 
-// Helper function to send push notification via Expo
-async function sendPushNotification(pushToken: string, title: string, body: string, data?: any) {
-    const message = {
+function isValidExpoPushToken(token?: string | null): token is string {
+    if (!token || typeof token !== 'string') return false;
+    return token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[');
+}
+
+interface PushOptions {
+    channelId?: string;
+    sound?: string;
+    categoryId?: string;
+}
+
+// Helper function to send push notification via Expo with full response error checks
+async function sendPushNotification(pushToken: string, title: string, body: string, data?: any, options?: PushOptions): Promise<boolean> {
+    if (!isValidExpoPushToken(pushToken)) {
+        console.warn(`[Push] Skipped invalid Expo push token: ${String(pushToken).substring(0, 25)}`);
+        return false;
+    }
+
+    const message: any = {
         to: pushToken,
-        sound: 'default',
+        sound: options?.sound || 'default',
         title,
         body,
         data: data || {},
+        priority: 'high',
+        channelId: options?.channelId || 'default',
+        _displayInForeground: true,
     };
+    if (options?.categoryId) {
+        message.categoryId = options.categoryId;
+    }
 
     try {
-        await fetch('https://exp.host/--/api/v2/push/send', {
+        const res = await fetch('https://exp.host/--/api/v2/push/send', {
             method: 'POST',
             headers: {
                 'Accept': 'application/json',
+                'Accept-Encoding': 'gzip, deflate',
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify(message),
         });
-        console.log(`Push notification sent to ${pushToken.substring(0, 20)}...`);
+        const json: any = await res.json().catch(() => null);
+        const ticket = Array.isArray(json?.data) ? json.data[0] : json?.data;
+        if (ticket?.status === 'error') {
+            console.error(`[Push] Expo push error for ${pushToken.substring(0, 24)}...:`, ticket.message, ticket.details);
+            return false;
+        }
+        console.log(`[Push] Sent "${title}" to ${pushToken.substring(0, 24)}... (id: ${ticket?.id || 'ok'})`);
+        return true;
     } catch (error) {
-        console.error('Error sending push notification:', error);
+        console.error('[Push] Network error sending push notification:', error);
+        return false;
     }
+}
+
+// Send push notification across all registered app tokens of a user
+async function sendPushToUser(user: any, title: string, body: string, data?: any, options?: PushOptions): Promise<void> {
+    if (!user) return;
+    const tokenSet = new Set<string>();
+    if (isValidExpoPushToken(user.pushToken)) tokenSet.add(user.pushToken);
+    if (Array.isArray(user.pushTokens)) {
+        for (const t of user.pushTokens) {
+            if (isValidExpoPushToken(t)) tokenSet.add(t);
+        }
+    }
+    if (tokenSet.size === 0) return;
+
+    await Promise.allSettled(
+        Array.from(tokenSet).map(token => sendPushNotification(token, title, body, data, options))
+    );
+}
+
+function getGoogleMapsKey(): string {
+    return (
+        process.env.GOOGLE_MAPS_API_KEY ||
+        process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
+        'AIzaSyBfBd_6W9AndpyPJW0gPsBUvlyiG21UWjc'
+    );
 }
 
 // Middleware to authenticate token
@@ -804,16 +909,27 @@ app.post('/api/auth/phone-login', async (req, res) => {
                 },
             });
         } else {
-            // User exists, update location/push token if provided
+            // User exists, update location/push token only with valid non-null values (never overwrite valid pushToken with null)
             try {
-                if (location || latitude || longitude || pushToken) {
+                const updateData: any = {};
+                if (location) updateData.location = location;
+                if (typeof latitude === 'number' && typeof longitude === 'number') {
+                    updateData.latitude = latitude;
+                    updateData.longitude = longitude;
+                }
+                if (isValidExpoPushToken(pushToken)) {
+                    updateData.pushToken = pushToken;
+                    const merged = Array.from(new Set([pushToken, ...(user.pushTokens || [])])).slice(0, 5);
+                    updateData.pushTokens = merged;
+                }
+                if (Object.keys(updateData).length > 0) {
                     await prisma.user.update({
                         where: { id: user.id },
-                        data: { location, latitude, longitude, pushToken }
+                        data: updateData
                     });
                 }
             } catch (ignore) {
-                console.warn('Could not update user location (schema mismatch?)');
+                console.warn('Could not update user location/push token on login:', ignore);
             }
         }
 
@@ -828,23 +944,413 @@ app.post('/api/auth/phone-login', async (req, res) => {
     }
 });
 
-// Update Push Token (called on every app launch when user is already logged in)
+// Update Push Token and/or Location (supports updating location on Web without a pushToken)
 app.post('/api/auth/update-push-token', authenticateToken, async (req: any, res: any) => {
     try {
         const { pushToken, latitude, longitude } = req.body;
         const userId = req.user.id;
-        if (!pushToken) return res.status(400).json({ error: 'pushToken is required' });
+        const hasValidToken = isValidExpoPushToken(pushToken);
+        const hasCoords = typeof latitude === 'number' && typeof longitude === 'number';
+
+        if (!hasValidToken && !hasCoords) {
+            return res.status(400).json({ error: 'Valid pushToken or latitude/longitude coordinates required' });
+        }
+
+        const existingUser = await prisma.user.findUnique({ where: { id: userId } });
+        const updateData: any = {};
+        if (hasValidToken) {
+            updateData.pushToken = pushToken;
+            const existingList = existingUser?.pushTokens || [];
+            updateData.pushTokens = Array.from(new Set([pushToken, ...existingList])).slice(0, 5);
+        }
+        if (hasCoords) {
+            updateData.latitude = latitude;
+            updateData.longitude = longitude;
+        }
+
         await prisma.user.update({
             where: { id: userId },
-            data: {
-                pushToken,
-                ...(latitude !== undefined && longitude !== undefined ? { latitude, longitude } : {}),
-            },
+            data: updateData,
         });
         res.json({ message: 'Push token and location updated successfully' });
     } catch (error) {
         console.error('Error updating push token:', error);
         res.status(500).json({ error: 'Failed to update push token' });
+    }
+});
+
+// Delete user account cleanly
+app.delete('/api/auth/account', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        await prisma.notification.deleteMany({ where: { userId } });
+        await prisma.message.deleteMany({ where: { senderId: userId } });
+        await prisma.callRequest.deleteMany({ where: { OR: [{ initiatorId: userId }, { recipientId: userId }] } });
+        await prisma.communityMember.deleteMany({ where: { userId } });
+        await prisma.organizationAdmin.deleteMany({ where: { userId } });
+        await prisma.complaint.deleteMany({ where: { userId } });
+        const userItems = await prisma.item.findMany({ where: { userId }, select: { id: true } });
+        const itemIds = userItems.map(i => i.id);
+        if (itemIds.length > 0) {
+            await prisma.question.deleteMany({ where: { itemId: { in: itemIds } } });
+            await prisma.item.deleteMany({ where: { id: { in: itemIds } } });
+        }
+        await prisma.user.delete({ where: { id: userId } });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error deleting account:', error);
+        res.status(500).json({ error: 'Failed to delete account' });
+    }
+});
+
+// ============= Google Maps & Places Proxy Endpoints (with OSM/Overpass Fallback) =============
+
+app.get('/api/places/autocomplete', async (req, res) => {
+    const input = String(req.query.input || '').trim();
+    const lat = req.query.lat ? parseFloat(String(req.query.lat)) : undefined;
+    const lng = req.query.lng ? parseFloat(String(req.query.lng)) : undefined;
+    if (input.length < 2) return res.json({ results: [] });
+
+    const key = getGoogleMapsKey();
+    try {
+        let gUrl = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(input)}&key=${encodeURIComponent(key)}`;
+        if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
+            gUrl += `&location=${lat},${lng}&radius=50000`;
+        }
+        const gRes = await fetch(gUrl);
+        if (gRes.ok) {
+            const gData: any = await gRes.json();
+            if (gData.status === 'OK' && Array.isArray(gData.predictions)) {
+                const results = gData.predictions.map((p: any) => ({
+                    place_id: p.place_id,
+                    googlePlaceId: p.place_id,
+                    display_name: p.description,
+                    main_text: p.structured_formatting?.main_text || p.description,
+                    secondary_text: p.structured_formatting?.secondary_text || '',
+                    source: 'google',
+                }));
+                return res.json({ results, provider: 'google' });
+            }
+            if (gData.status === 'ZERO_RESULTS') {
+                return res.json({ results: [], provider: 'google' });
+            }
+            console.warn('[Places Autocomplete] Google status:', gData.status, gData.error_message || '');
+        }
+    } catch (err: any) {
+        console.warn('[Places Autocomplete] Google error:', err.message);
+    }
+
+    // Fallback to Photon + Nominatim
+    const combined: any[] = [];
+    try {
+        let photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(input)}&limit=10`;
+        if (lat !== undefined && lng !== undefined) photonUrl += `&lat=${lat}&lon=${lng}`;
+        const pRes = await fetch(photonUrl, { headers: { 'User-Agent': 'FindMyThingApp/1.0' } });
+        if (pRes.ok) {
+            const pData: any = await pRes.json();
+            for (const f of (pData.features || [])) {
+                const p = f.properties || {};
+                const c = f.geometry?.coordinates || [0, 0];
+                const name = p.name || p.street || input;
+                const display = [name, p.city || p.district || p.state].filter(Boolean).join(', ');
+                combined.push({
+                    place_id: `photon-${c[1]}-${c[0]}`,
+                    display_name: display,
+                    lat: String(c[1]),
+                    lon: String(c[0]),
+                    distanceKm: (lat !== undefined && lng !== undefined) ? calculateDistance(lat, lng, c[1], c[0]) : undefined,
+                    source: 'osm',
+                });
+            }
+        }
+    } catch {}
+    try {
+        let nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(input)}&format=json&limit=8`;
+        if (lat !== undefined && lng !== undefined) {
+            const delta = 0.5;
+            nomUrl += `&viewbox=${lng - delta},${lat + delta},${lng + delta},${lat - delta}`;
+        }
+        const nRes = await fetch(nomUrl, { headers: { 'User-Agent': 'FindMyThingApp/1.0' } });
+        if (nRes.ok) {
+            const nData: any = await nRes.json();
+            if (Array.isArray(nData)) {
+                for (const item of nData) {
+                    const itemLat = parseFloat(item.lat);
+                    const itemLon = parseFloat(item.lon);
+                    combined.push({
+                        place_id: String(item.place_id),
+                        display_name: item.display_name,
+                        lat: item.lat,
+                        lon: item.lon,
+                        distanceKm: (lat !== undefined && lng !== undefined) ? calculateDistance(lat, lng, itemLat, itemLon) : undefined,
+                        source: 'osm',
+                    });
+                }
+            }
+        }
+    } catch {}
+    res.json({ results: combined, provider: 'osm' });
+});
+
+app.get('/api/places/details', async (req, res) => {
+    const placeId = String(req.query.placeId || '').trim();
+    if (!placeId) return res.status(400).json({ error: 'placeId required' });
+
+    const key = getGoogleMapsKey();
+    try {
+        const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${encodeURIComponent(placeId)}&fields=name,formatted_address,geometry&key=${encodeURIComponent(key)}`;
+        const gRes = await fetch(url);
+        if (gRes.ok) {
+            const gData: any = await gRes.json();
+            if (gData.status === 'OK' && gData.result?.geometry?.location) {
+                const r = gData.result;
+                return res.json({
+                    name: r.name,
+                    display_name: r.name && !r.formatted_address?.startsWith(r.name)
+                        ? `${r.name}, ${r.formatted_address}`
+                        : (r.formatted_address || r.name),
+                    lat: r.geometry.location.lat,
+                    lon: r.geometry.location.lng,
+                });
+            }
+        }
+    } catch {}
+    res.status(404).json({ error: 'Place details unavailable' });
+});
+
+app.get('/api/places/nearby', async (req, res) => {
+    const lat = parseFloat(String(req.query.lat || ''));
+    const lng = parseFloat(String(req.query.lng || ''));
+    if (isNaN(lat) || isNaN(lng)) return res.json({ results: [] });
+
+    const key = getGoogleMapsKey();
+    try {
+        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&rankby=distance&key=${encodeURIComponent(key)}`;
+        const gRes = await fetch(url);
+        if (gRes.ok) {
+            const gData: any = await gRes.json();
+            if (gData.status === 'OK' && Array.isArray(gData.results)) {
+                const results = gData.results.slice(0, 15).map((p: any) => {
+                    const pLat = p.geometry?.location?.lat;
+                    const pLon = p.geometry?.location?.lng;
+                    const display = [p.name, p.vicinity].filter(Boolean).join(', ');
+                    return {
+                        place_id: p.place_id,
+                        display_name: display,
+                        lat: String(pLat),
+                        lon: String(pLon),
+                        distanceKm: (pLat && pLon) ? calculateDistance(lat, lng, pLat, pLon) : 0,
+                        source: 'google',
+                    };
+                });
+                return res.json({ results, provider: 'google' });
+            }
+        }
+    } catch {}
+
+    // Fallback: OpenStreetMap Overpass API nearby named POIs within 1.5 km
+    try {
+        const overpassQuery = `[out:json][timeout:6];(node(around:1500,${lat},${lng})[name];way(around:1500,${lat},${lng})[name]["amenity"];way(around:1500,${lat},${lng})[name]["shop"];way(around:1500,${lat},${lng})[name]["building"];);out center 20;`;
+        const ovRes = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `data=${encodeURIComponent(overpassQuery)}`,
+        });
+        if (ovRes.ok) {
+            const ovData: any = await ovRes.json();
+            const pois = (ovData.elements || [])
+                .map((el: any) => {
+                    const elLat = el.lat || el.center?.lat;
+                    const elLon = el.lon || el.center?.lon;
+                    const name = el.tags?.name;
+                    if (!elLat || !elLon || !name) return null;
+                    const extra = el.tags?.['addr:street'] || el.tags?.['addr:suburb'] || el.tags?.amenity || el.tags?.shop || '';
+                    return {
+                        place_id: `ov-${el.id}`,
+                        display_name: extra ? `${name}, ${extra}` : name,
+                        lat: String(elLat),
+                        lon: String(elLon),
+                        distanceKm: calculateDistance(lat, lng, elLat, elLon),
+                        source: 'overpass',
+                    };
+                })
+                .filter(Boolean)
+                .sort((a: any, b: any) => a.distanceKm - b.distanceKm)
+                .slice(0, 15);
+            return res.json({ results: pois, provider: 'overpass' });
+        }
+    } catch {}
+
+    res.json({ results: [] });
+});
+
+app.get('/api/places/geocode', async (req, res) => {
+    const lat = parseFloat(String(req.query.lat || ''));
+    const lng = parseFloat(String(req.query.lng || ''));
+    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat and lng required' });
+
+    const key = getGoogleMapsKey();
+    try {
+        const [geoRes, nearbyRes] = await Promise.all([
+            fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${encodeURIComponent(key)}`),
+            fetch(`https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&rankby=distance&key=${encodeURIComponent(key)}`)
+        ]);
+        let landmark = '';
+        if (nearbyRes.ok) {
+            const nData: any = await nearbyRes.json();
+            if (nData.status === 'OK' && nData.results?.length > 0) {
+                const top = nData.results[0];
+                const dKm = calculateDistance(lat, lng, top.geometry.location.lat, top.geometry.location.lng);
+                if (dKm <= 0.15 && top.name) {
+                    landmark = top.name;
+                }
+            }
+        }
+        if (geoRes.ok) {
+            const gData: any = await geoRes.json();
+            if (gData.status === 'OK' && gData.results?.length > 0) {
+                const formatted = gData.results[0].formatted_address;
+                const address = landmark && !formatted.toLowerCase().includes(landmark.toLowerCase())
+                    ? `${landmark}, ${formatted}`
+                    : formatted;
+                return res.json({ address, provider: 'google' });
+            }
+        }
+    } catch {}
+
+    // Fallback to OpenStreetMap Nominatim zoom=18
+    try {
+        const nomRes = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18&addressdetails=1`,
+            { headers: { 'User-Agent': 'FindMyThingApp/1.0', 'Accept-Language': 'en-US,en;q=0.9' } }
+        );
+        if (nomRes.ok) {
+            const data: any = await nomRes.json();
+            if (data?.address) {
+                const a = data.address;
+                const parts = [
+                    data.name || a.amenity || a.building || a.shop || a.place,
+                    a.road || a.street,
+                    a.suburb || a.village || a.neighbourhood,
+                    a.town || a.city || a.county,
+                    a.state_district || a.district,
+                    a.postcode
+                ].filter(Boolean);
+                const uniq: string[] = [];
+                for (const p of parts) { if (!uniq.includes(p)) uniq.push(p); }
+                if (uniq.length >= 2) return res.json({ address: uniq.join(', '), provider: 'osm' });
+                if (data.display_name) return res.json({ address: data.display_name, provider: 'osm' });
+            }
+        }
+    } catch {}
+    res.json({ address: `Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`, provider: 'coords' });
+});
+
+// ============= Call State Recovery Endpoints (for Background / Closed App Notification Answering) =============
+
+app.get('/api/calls/pending', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        const cutoff = new Date(Date.now() - 75 * 1000); // Active ringing calls within 75s
+        const call = await prisma.callRequest.findFirst({
+            where: {
+                recipientId: userId,
+                status: 'PENDING',
+                createdAt: { gte: cutoff },
+            },
+            orderBy: { createdAt: 'desc' },
+            include: { initiator: { select: { id: true, name: true } } },
+        });
+        if (!call) return res.json({ call: null });
+
+        let parsedSdp = null;
+        try { parsedSdp = call.sdp ? JSON.parse(call.sdp) : null; } catch {}
+        const iceCandidates = pendingCallIceMap.get(call.conversationId) || [];
+
+        res.json({
+            call: {
+                callRequestId: call.id,
+                conversationId: call.conversationId,
+                senderId: call.initiatorId,
+                senderName: call.initiator?.name || 'Unknown',
+                sdp: parsedSdp,
+                iceCandidates,
+                createdAt: call.createdAt,
+            }
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/calls/conversation/:conversationId/pending', authenticateToken, async (req: any, res: any) => {
+    try {
+        const userId = req.user.id;
+        const { conversationId } = req.params;
+        const cutoff = new Date(Date.now() - 120 * 1000);
+        const call = await prisma.callRequest.findFirst({
+            where: {
+                conversationId,
+                recipientId: userId,
+                status: 'PENDING',
+                createdAt: { gte: cutoff },
+            },
+            orderBy: { createdAt: 'desc' },
+            include: { initiator: { select: { id: true, name: true } } },
+        });
+        if (!call) return res.json({ call: null });
+
+        let parsedSdp = null;
+        try { parsedSdp = call.sdp ? JSON.parse(call.sdp) : null; } catch {}
+        const iceCandidates = pendingCallIceMap.get(conversationId) || [];
+
+        res.json({
+            call: {
+                callRequestId: call.id,
+                conversationId: call.conversationId,
+                senderId: call.initiatorId,
+                senderName: call.initiator?.name || 'Unknown',
+                sdp: parsedSdp,
+                iceCandidates,
+            }
+        });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/calls/:id/reject', authenticateToken, async (req: any, res: any) => {
+    try {
+        const { id } = req.params;
+        const call = await prisma.callRequest.findUnique({ where: { id } });
+        if (!call) return res.status(404).json({ error: 'Call not found' });
+        await prisma.callRequest.update({
+            where: { id },
+            data: { status: 'REJECTED', endedAt: new Date() }
+        });
+        pendingCallIceMap.delete(call.conversationId);
+        wsBroadcastToUser(call.initiatorId, { type: 'CALL_REJECTED', conversationId: call.conversationId });
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/calls/:id/end', authenticateToken, async (req: any, res: any) => {
+    try {
+        const { id } = req.params;
+        const call = await prisma.callRequest.findUnique({ where: { id } });
+        if (!call) return res.status(404).json({ error: 'Call not found' });
+        await prisma.callRequest.update({
+            where: { id },
+            data: { status: 'ENDED', endedAt: new Date() }
+        });
+        pendingCallIceMap.delete(call.conversationId);
+        const peerId = call.initiatorId === req.user.id ? call.recipientId : call.initiatorId;
+        wsBroadcastToUser(peerId, { type: 'CALL_ENDED', conversationId: call.conversationId });
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -1029,15 +1535,19 @@ app.post('/api/items', async (req, res) => {
                             }
                         });
 
-                        // 2. Send Expo Push Notification
-                        if (complaintUser.pushToken) {
-                            await sendPushNotification(
-                                complaintUser.pushToken,
-                                'Possible Match Found! 🎉',
-                                `Someone found a "${item.name}" that matches your complaint. Check it out now!`,
-                                { url: `/notifications` }
-                            );
-                        }
+                        // 2. Broadcast live notification & send Expo Push Notification across all user tokens
+                        wsBroadcastToUser(complaintUser.id, {
+                            type: 'NEW_NOTIFICATION',
+                            title: 'Possible Match Found! 🎉',
+                            message: `Someone found a "${item.name}" that matches your complaint!`,
+                            url: '/notifications',
+                        });
+                        await sendPushToUser(
+                            complaintUser,
+                            'Possible Match Found! 🎉',
+                            `Someone found a "${item.name}" that matches your complaint. Check it out now!`,
+                            { url: `/notifications`, type: 'MATCH_ALERT' }
+                        );
                     }
                 }
             }
@@ -1057,100 +1567,145 @@ app.post('/api/items', async (req, res) => {
     }
 });
 
-// Create Complaint (Updated to link user)
+// Create Complaint (Updated with optional phone, exposePhoneNumber, and reliable cross-platform push notifications)
 app.post('/api/complaints', async (req, res) => {
     try {
-        const { name, category, location, date, description, contactInfo, imageUris, userId, cashPrize, latitude, longitude, notifyRadius, targetCommunityId, targetOrganizationId } = req.body;
+        const {
+            name,
+            category,
+            location,
+            date,
+            description,
+            contactInfo,
+            exposePhoneNumber,
+            imageUris,
+            userId,
+            cashPrize,
+            latitude,
+            longitude,
+            notifyRadius,
+            targetCommunityId,
+            targetOrganizationId
+        } = req.body;
+
+        const cleanContact = (contactInfo && String(contactInfo).trim()) || null;
+        const canExposePhone = Boolean(exposePhoneNumber) && Boolean(cleanContact);
+
         const complaint = await prisma.complaint.create({
             data: {
                 name: String(name).trim(),
                 category: String(category).trim(),
                 location: String(location).trim(),
                 date,
-                description,
-                contactInfo,
+                description: description || '',
+                contactInfo: cleanContact,
+                exposePhoneNumber: canExposePhone,
                 imageUris: imageUris ? JSON.stringify(imageUris) : '[]',
                 userId: userId || null,
                 cashPrize: cashPrize || null,
-                latitude: latitude || null,
-                longitude: longitude || null,
-                notifyRadius: notifyRadius || 1,
+                latitude: typeof latitude === 'number' ? latitude : (latitude ? parseFloat(latitude) : null),
+                longitude: typeof longitude === 'number' ? longitude : (longitude ? parseFloat(longitude) : null),
+                notifyRadius: notifyRadius || 5,
                 targetCommunityId: targetCommunityId || null,
                 targetOrganizationId: targetOrganizationId || null,
             },
         });
-        res.json(complaint);
 
-        // Notify relevant users
+        // Notify relevant users BEFORE finalizing response so push delivery never gets cut off
         if (location || targetCommunityId || targetOrganizationId) {
             try {
                 const allUsers = await prisma.user.findMany({
-                    where: { NOT: { id: userId || 'unknown-id' } },
+                    where: userId ? { NOT: { id: userId } } : undefined,
                     include: { memberships: true, orgAdmins: true }
                 });
 
-                const complaintLat = latitude || null;
-                const complaintLon = longitude || null;
-                const radius = notifyRadius || 5;
+                const complaintLat = complaint.latitude;
+                const complaintLon = complaint.longitude;
+                const radius = Number(notifyRadius) || 5;
+                const locTokens = String(location || '')
+                    .toLowerCase()
+                    .split(/[\s,]+/)
+                    .filter(w => w.length >= 4);
 
-                let usersToNotify = allUsers.filter((user: any) => {
-                    // 1. Community target: only notify community members
+                const usersToNotify = allUsers.filter((u: any) => {
+                    // 1. Community target: notify approved members
                     if (targetCommunityId) {
-                        return user.memberships.some((m: any) => m.communityId === targetCommunityId);
+                        return u.memberships.some((m: any) => m.communityId === targetCommunityId && m.role !== 'PENDING');
                     }
 
-                    // 2. Organization target: only notify org admins/members
+                    // 2. Organization target: notify org admins/members
                     if (targetOrganizationId) {
-                        return user.orgAdmins.some((a: any) => a.organizationId === targetOrganizationId);
+                        return u.orgAdmins.some((a: any) => a.organizationId === targetOrganizationId);
                     }
 
-                    // 3. Radius: GPS-based if complaint has coordinates
+                    // 3. Radius matching when complaint has coordinates
                     if (complaintLat && complaintLon) {
-                        // If user has GPS saved → filter by distance
-                        if (user.latitude && user.longitude) {
-                            const distance = calculateDistance(complaintLat, complaintLon, user.latitude, user.longitude);
-                            return distance <= radius;
+                        if (u.latitude && u.longitude) {
+                            const distance = calculateDistance(complaintLat, complaintLon, u.latitude, u.longitude);
+                            if (distance <= radius) return true;
+                            // Also match if user has a matching town/city text within generous local browser drift (e.g. web IP offset up to 15km)
+                            if (u.location && locTokens.length > 0 && distance <= Math.max(radius, 15)) {
+                                const uLocLower = String(u.location).toLowerCase();
+                                if (locTokens.some(tok => uLocLower.includes(tok))) return true;
+                            }
+                            return false;
                         }
-                        // If user has no GPS saved → skip them (they haven't opened the app recently)
+                        // User does not have GPS coordinates saved yet: match city name or best-effort push if registered with app token
+                        if (u.location && locTokens.length > 0) {
+                            const uLocLower = String(u.location).toLowerCase();
+                            if (locTokens.some(tok => uLocLower.includes(tok))) return true;
+                        }
+                        if (isValidExpoPushToken(u.pushToken) || (Array.isArray(u.pushTokens) && u.pushTokens.length > 0)) {
+                            return true;
+                        }
                         return false;
                     }
 
-                    // 4. Complaint has no GPS at all → notify everyone as best effort
+                    // 4. Complaint has no GPS coordinates → notify all users as best effort
                     return true;
                 });
 
-                console.log(`Found ${usersToNotify.length} users to notify for complaint in ${location}`);
+                console.log(`[Complaint Notify] Found ${usersToNotify.length} users to notify for "${name}" in "${location}"`);
 
                 if (usersToNotify.length > 0) {
-                    const notifications = usersToNotify.map(user => ({
-                        userId: user.id,
-                        title: 'New Complaint Matching Your Notification Settings',
-                        message: `Someone lost a "${name}" in ${location}. Check if you can help!`,
+                    const notifTitle = 'New Lost Item Nearby 📍';
+                    const notifBody = `Someone lost a "${name}" near ${location}. Check if you can help!`;
+                    const notifUrl = `/founder/complaint-detail?id=${complaint.id}`;
+
+                    const notifications = usersToNotify.map(u => ({
+                        userId: u.id,
+                        title: notifTitle,
+                        message: notifBody,
                         type: 'AREA_ALERT',
                         payload: JSON.stringify({ complaintId: complaint.id, location }),
                     }));
 
-                    await prisma.notification.createMany({
-                        data: notifications
-                    });
-                    
-                    // Actually trigger the push notifications!
-                    for (const user of usersToNotify) {
-                        if (user.pushToken) {
-                            await sendPushNotification(
-                                user.pushToken,
-                                'New Complaint',
-                                `Someone lost a "${name}" in ${location}. Check if you can help!`,
-                                { url: `/notifications` }
+                    await prisma.notification.createMany({ data: notifications });
+
+                    await Promise.allSettled(
+                        usersToNotify.map(async (u: any) => {
+                            wsBroadcastToUser(u.id, {
+                                type: 'NEW_NOTIFICATION',
+                                title: notifTitle,
+                                message: notifBody,
+                                url: notifUrl,
+                                notificationType: 'AREA_ALERT',
+                            });
+                            await sendPushToUser(
+                                u,
+                                notifTitle,
+                                notifBody,
+                                { url: notifUrl, type: 'AREA_ALERT', complaintId: complaint.id }
                             );
-                        }
-                    }
-                    console.log(`Sent ${notifications.length} notifications.`);
+                        })
+                    );
                 }
             } catch (notifyError) {
-                console.error('Error sending location notifications:', notifyError);
+                console.error('Error sending complaint notifications:', notifyError);
             }
         }
+
+        res.json(complaint);
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to create complaint' });
@@ -1342,7 +1897,12 @@ app.get('/api/complaints', async (req, res) => {
             });
         }
 
-        res.json(complaints);
+        const sanitizedComplaints = complaints.map((c: any) => ({
+            ...c,
+            contactInfo: (c.exposePhoneNumber || (currentUser && c.userId === currentUser.id)) ? c.contactInfo : null,
+        }));
+
+        res.json(sanitizedComplaints);
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to fetch complaints' });
@@ -1352,12 +1912,30 @@ app.get('/api/complaints', async (req, res) => {
 // Get Complaint by ID
 app.get('/api/complaints/:id', async (req, res) => {
     try {
+        let requesterId: string | null = null;
+        const authHeader = req.headers['authorization'];
+        if (authHeader) {
+            const token = authHeader.split(' ')[1];
+            if (token) {
+                try {
+                    const decoded = jwt.verify(token, JWT_SECRET) as any;
+                    requesterId = decoded.id;
+                } catch {}
+            }
+        }
+
         const { id } = req.params;
-        const complaint = await prisma.complaint.findUnique({
+        const complaint: any = await prisma.complaint.findUnique({
             where: { id },
+            include: { user: { select: { id: true, name: true } } },
         });
         if (!complaint) {
             return res.status(404).json({ error: 'Complaint not found' });
+        }
+
+        const isOwner = requesterId && complaint.userId === requesterId;
+        if (!complaint.exposePhoneNumber && !isOwner) {
+            complaint.contactInfo = null;
         }
         res.json(complaint);
     } catch (error) {
@@ -1417,7 +1995,7 @@ app.patch('/api/items/:id', async (req, res) => {
 app.patch('/api/complaints/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, closureReason, reopenReason, resolvedAt, name, category, location, date, description, contactInfo, imageUris, notifyRadius, targetCommunityId, targetOrganizationId } = req.body;
+        const { status, closureReason, reopenReason, resolvedAt, name, category, location, date, description, contactInfo, exposePhoneNumber, imageUris, notifyRadius, targetCommunityId, targetOrganizationId } = req.body;
 
         // Get the current complaint to check if status is changing
         const currentComplaint = await prisma.complaint.findUnique({ where: { id } });
@@ -1438,7 +2016,11 @@ app.patch('/api/complaints/:id', async (req, res) => {
         if (location !== undefined) data.location = location;
         if (date !== undefined) data.date = date;
         if (description !== undefined) data.description = description;
-        if (contactInfo !== undefined) data.contactInfo = contactInfo;
+        if (contactInfo !== undefined) data.contactInfo = (contactInfo && String(contactInfo).trim()) || null;
+        if (exposePhoneNumber !== undefined) {
+            const resultingContact = contactInfo !== undefined ? contactInfo : currentComplaint.contactInfo;
+            data.exposePhoneNumber = Boolean(exposePhoneNumber) && Boolean(resultingContact && String(resultingContact).trim());
+        }
         if (notifyRadius !== undefined) data.notifyRadius = notifyRadius;
         if (targetCommunityId !== undefined) data.targetCommunityId = targetCommunityId;
         if (targetOrganizationId !== undefined) data.targetOrganizationId = targetOrganizationId;
@@ -1542,11 +2124,10 @@ app.patch('/api/complaints/:id', async (req, res) => {
                             });
                             console.log(`Created reopen notification for founder ${item.userId}`);
 
-                            // Send Push Notification
                             const founderUser = await prisma.user.findUnique({ where: { id: item.userId } });
-                            if (founderUser && founderUser.pushToken) {
-                                await sendPushNotification(
-                                    founderUser.pushToken,
+                            if (founderUser) {
+                                await sendPushToUser(
+                                    founderUser,
                                     'Complaint Reopened ⚠️',
                                     `The victim has reopened their complaint "${currentComplaint.name}". ${reopenReason || ''}`,
                                     { url: `/notifications` }
@@ -1628,11 +2209,10 @@ app.post('/api/complaints/:id/resolve', authenticateToken, async (req: any, res)
                             }
                         });
 
-                        // Send Push Notification
                         const founderUser = await prisma.user.findUnique({ where: { id: item.userId } });
-                        if (founderUser && founderUser.pushToken) {
-                            await sendPushNotification(
-                                founderUser.pushToken,
+                        if (founderUser) {
+                            await sendPushToUser(
+                                founderUser,
                                 'Item Successfully Recovered! 🎉',
                                 messageText,
                                 { url: `/notifications` }
@@ -1773,14 +2353,20 @@ app.post('/api/complaints/:id/notify', authenticateToken, async (req: any, res) 
             console.log('Notification created:', notification);
         }
 
-        // --- ADDED: Send Expo Push Notification to the Victim ---
+        // Send live WS + Expo Push Notification to the Victim
         const victimUser = await prisma.user.findUnique({ where: { id: complaint.userId } });
-        if (victimUser && victimUser.pushToken) {
-            await sendPushNotification(
-                victimUser.pushToken,
+        if (victimUser) {
+            wsBroadcastToUser(victimUser.id, {
+                type: 'NEW_NOTIFICATION',
+                title: 'Someone found your item! 🎉',
+                message: `A founder has reached out regarding '${complaint.name}'.`,
+                url: '/notifications',
+            });
+            await sendPushToUser(
+                victimUser,
                 'Someone found your item! 🎉',
                 `A founder has reached out regarding '${complaint.name}'. Open the app to view their message and claim your item.`,
-                { url: `/notifications` }
+                { url: `/notifications`, type: 'CLAIM_REQUEST' }
             );
         }
 

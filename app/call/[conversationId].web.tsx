@@ -1,9 +1,10 @@
 // Web version of the call screen — uses browser's built-in WebRTC APIs
-// (RTCPeerConnection, getUserMedia are native to all modern browsers)
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Phone, PhoneOff, Mic, MicOff, ChevronDown } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, ChevronDown } from 'lucide-react-native';
+import { API_URL } from '../../constants/api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
@@ -20,25 +21,32 @@ const ICE_SERVERS = {
 type CallState = 'connecting' | 'ringing' | 'active' | 'ended' | 'rejected';
 
 export default function CallScreenWeb() {
-    const { conversationId, otherName, isInitiator, incomingSdp } = useLocalSearchParams<{
+    const { conversationId, otherName, isInitiator, incomingSdp, callRequestId, autoAccept } = useLocalSearchParams<{
         conversationId: string;
-        otherName: string;
-        isInitiator: string;
+        otherName?: string;
+        isInitiator?: string;
         incomingSdp?: string;
+        callRequestId?: string;
+        autoAccept?: string;
     }>();
     const { colors } = useTheme();
-    const { activeCall, setActiveCall, updateCall, endActiveCall } = useCall();
+    const { activeCall, setActiveCall, updateCall } = useCall();
     const router = useRouter();
     const initiator = isInitiator === 'true';
 
+    const [displayName, setDisplayName] = useState(otherName || 'User');
     const [callState, setCallState] = useState<CallState>(initiator ? 'connecting' : 'ringing');
     const [muted, setMuted] = useState(false);
+    const [speakerOn, setSpeakerOn] = useState(true);
     const [duration, setDuration] = useState(0);
 
     const pcRef = useRef<RTCPeerConnection | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isExplicitlyEnded = useRef(false);
+    const pendingOfferRef = useRef<any>(null);
+    const pendingIceRef = useRef<any[]>([]);
+    const activeCallReqIdRef = useRef<string | undefined>(callRequestId);
 
     const cleanupWebRTC = () => {
         soundEffects.stopAll();
@@ -47,7 +55,6 @@ export default function CallScreenWeb() {
         pcRef.current?.close();
         pcRef.current = null;
 
-        // Stop audio player
         if (typeof document !== 'undefined') {
             const player = document.getElementById('findmything-call-audio') as HTMLAudioElement;
             if (player) {
@@ -62,7 +69,6 @@ export default function CallScreenWeb() {
         pcRef.current = pc;
 
         try {
-            // Get mic audio using browser API
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             localStreamRef.current = stream;
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -77,7 +83,6 @@ export default function CallScreenWeb() {
         };
 
         pc.onconnectionstatechange = () => {
-            console.log('[WebRTC] connectionState changed:', pc.connectionState);
             if (pc.connectionState === 'connected') {
                 soundEffects.stopRingback();
                 setCallState('active');
@@ -95,7 +100,6 @@ export default function CallScreenWeb() {
             }
         };
 
-        // Play received audio in browser
         pc.ontrack = (e) => {
             if (typeof document !== 'undefined') {
                 let audio = document.getElementById('findmything-call-audio') as HTMLAudioElement;
@@ -114,12 +118,18 @@ export default function CallScreenWeb() {
         return pc;
     }, [conversationId, updateCall]);
 
-    // Recipient: accept call
-    const acceptCall = useCallback(async (incomingOffer: any) => {
-        console.log('[WebRTC] Accepting incoming offer on web');
+    const acceptCall = useCallback(async (incomingOffer: any, bufferedIce: any[] = []) => {
+        const offerToUse = incomingOffer || pendingOfferRef.current;
+        if (!offerToUse) return;
         soundEffects.stopAll();
         const pc = await setupPC();
-        await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer));
+        await pc.setRemoteDescription(new RTCSessionDescription(offerToUse));
+
+        const iceList = bufferedIce.length > 0 ? bufferedIce : pendingIceRef.current;
+        for (const cand of iceList) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch {}
+        }
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         chatService.sendCallAnswer(conversationId, answer);
@@ -130,11 +140,10 @@ export default function CallScreenWeb() {
         }
     }, [conversationId, setupPC, updateCall]);
 
-    // Initiator: start offer
     useEffect(() => {
         setActiveCall({
             conversationId,
-            otherName: otherName || 'User',
+            otherName: displayName,
             isInitiator: initiator,
             status: initiator ? 'connecting' : 'ringing',
             duration: 0,
@@ -151,32 +160,66 @@ export default function CallScreenWeb() {
                 chatService.sendCallOffer(conversationId, offer);
             })();
         } else {
-            // Recipient: If incoming SDP is available, accept immediately
             const raw = incomingSdp || activeCall?.incomingSdp;
             if (raw) {
                 try {
                     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    pendingOfferRef.current = parsed;
                     acceptCall(parsed);
                 } catch (e) {
                     console.error('[WebRTC] Could not parse incoming SDP', e);
                 }
+            } else {
+                (async () => {
+                    try {
+                        chatService.connect();
+                        const token = await AsyncStorage.getItem('token');
+                        if (!token) return;
+                        const res = await fetch(`${API_URL}/calls/conversation/${conversationId}/pending`, {
+                            headers: { Authorization: `Bearer ${token}` },
+                        });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        if (data?.call?.sdp) {
+                            activeCallReqIdRef.current = data.call.callRequestId;
+                            if (data.call.senderName) {
+                                setDisplayName(data.call.senderName);
+                                updateCall({ otherName: data.call.senderName });
+                            }
+                            pendingOfferRef.current = data.call.sdp;
+                            pendingIceRef.current = data.call.iceCandidates || [];
+                            if (autoAccept === 'true') {
+                                acceptCall(data.call.sdp, data.call.iceCandidates || []);
+                            } else {
+                                setCallState('ringing');
+                                soundEffects.startRingtone();
+                            }
+                        } else {
+                            setCallState('ended');
+                            updateCall({ status: 'ended' });
+                            setTimeout(() => {
+                                setActiveCall(null);
+                                router.back();
+                            }, 1500);
+                        }
+                    } catch (e) {
+                        console.error('[WebRTC Web] Recovery failed:', e);
+                    }
+                })();
             }
         }
 
         return () => {
             soundEffects.stopAll();
-            // Only teardown if call was explicitly ended, otherwise user navigated/minimized
             if (isExplicitlyEnded.current) {
                 cleanupWebRTC();
             }
         };
     }, []);
 
-    // WS Event Listeners
     useEffect(() => {
         const handleAnswer = async (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
-            console.log('[WebRTC] Caller received CALL_ANSWER');
             soundEffects.stopRingback();
             try {
                 await pcRef.current?.setRemoteDescription(new RTCSessionDescription(payload.sdp));
@@ -191,13 +234,11 @@ export default function CallScreenWeb() {
         };
 
         const handleIce = async (payload: WSPayload) => {
-            if (payload.conversationId !== conversationId) return;
-            try {
-                if (pcRef.current && payload.candidate) {
-                    await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
-                }
-            } catch (err) {
-                console.warn('[WebRTC] addIceCandidate failed', err);
+            if (payload.conversationId !== conversationId || !payload.candidate) return;
+            if (pcRef.current?.remoteDescription) {
+                try { await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate)); } catch {}
+            } else {
+                pendingIceRef.current.push(payload.candidate);
             }
         };
 
@@ -229,7 +270,10 @@ export default function CallScreenWeb() {
 
         const handleIncoming = (payload: WSPayload) => {
             if (payload.conversationId !== conversationId || initiator) return;
-            if (payload.sdp) acceptCall(payload.sdp);
+            if (payload.sdp) {
+                pendingOfferRef.current = payload.sdp;
+                acceptCall(payload.sdp);
+            }
         };
 
         chatService.on('CALL_ANSWER', handleAnswer);
@@ -247,10 +291,21 @@ export default function CallScreenWeb() {
         };
     }, [conversationId, initiator, acceptCall, updateCall, setActiveCall]);
 
-    const handleEndCall = useCallback(() => {
+    const handleEndCall = useCallback(async () => {
         isExplicitlyEnded.current = true;
         soundEffects.stopAll();
         chatService.endCall(conversationId);
+        if (activeCallReqIdRef.current) {
+            try {
+                const token = await AsyncStorage.getItem('token');
+                if (token) {
+                    await fetch(`${API_URL}/calls/${activeCallReqIdRef.current}/end`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}` },
+                    });
+                }
+            } catch {}
+        }
         cleanupWebRTC();
         setCallState('ended');
         updateCall({ status: 'ended' });
@@ -260,10 +315,21 @@ export default function CallScreenWeb() {
         }, 800);
     }, [conversationId, updateCall, setActiveCall]);
 
-    const handleRejectCall = useCallback(() => {
+    const handleRejectCall = useCallback(async () => {
         isExplicitlyEnded.current = true;
         soundEffects.stopAll();
         chatService.rejectCall(conversationId);
+        if (activeCallReqIdRef.current) {
+            try {
+                const token = await AsyncStorage.getItem('token');
+                if (token) {
+                    await fetch(`${API_URL}/calls/${activeCallReqIdRef.current}/reject`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}` },
+                    });
+                }
+            } catch {}
+        }
         cleanupWebRTC();
         setCallState('rejected');
         updateCall({ status: 'rejected' });
@@ -279,6 +345,17 @@ export default function CallScreenWeb() {
         updateCall({ muted: !muted });
     }, [muted, updateCall]);
 
+    const toggleSpeaker = useCallback(() => {
+        setSpeakerOn(s => {
+            const next = !s;
+            if (typeof document !== 'undefined') {
+                const player = document.getElementById('findmything-call-audio') as HTMLAudioElement;
+                if (player) player.volume = next ? 1.0 : 0.4;
+            }
+            return next;
+        });
+    }, []);
+
     const formatDuration = (s: number) =>
         `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
@@ -292,7 +369,6 @@ export default function CallScreenWeb() {
 
     return (
         <View style={[styles.container, { backgroundColor: '#0F172A' }]}>
-            {/* Top Bar with Minimize button */}
             <View style={styles.headerBar}>
                 <TouchableOpacity
                     style={styles.minimizeBtn}
@@ -307,9 +383,9 @@ export default function CallScreenWeb() {
 
             <View style={styles.top}>
                 <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
+                    <Text style={styles.avatarText}>{(displayName || '?')[0].toUpperCase()}</Text>
                 </View>
-                <Text style={styles.name}>{otherName}</Text>
+                <Text style={styles.name}>{displayName}</Text>
                 <Text style={[styles.status, callState === 'active' && { color: '#10B981', fontWeight: '700' }]}>
                     {stateLabels[callState]}
                 </Text>
@@ -317,18 +393,27 @@ export default function CallScreenWeb() {
 
             <View style={styles.controls}>
                 {(callState === 'connecting' || callState === 'active') && (
-                    <TouchableOpacity
-                        style={[styles.ctrlBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}
-                        onPress={toggleMute}
-                    >
-                        {muted ? <MicOff size={28} color="#FFF" /> : <Mic size={28} color="#FFF" />}
-                        <Text style={styles.ctrlLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
-                    </TouchableOpacity>
+                    <View style={styles.midRow}>
+                        <TouchableOpacity
+                            style={[styles.ctrlBtn, { backgroundColor: muted ? '#EF4444' : 'rgba(255,255,255,0.15)' }]}
+                            onPress={toggleMute}
+                        >
+                            {muted ? <MicOff size={28} color="#FFF" /> : <Mic size={28} color="#FFF" />}
+                            <Text style={styles.ctrlLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.ctrlBtn, { backgroundColor: speakerOn ? colors.primary : 'rgba(255,255,255,0.15)' }]}
+                            onPress={toggleSpeaker}
+                        >
+                            {speakerOn ? <Volume2 size={28} color="#FFF" /> : <VolumeX size={28} color="#FFF" />}
+                            <Text style={styles.ctrlLabel}>{speakerOn ? 'Speaker On' : 'Speaker Off'}</Text>
+                        </TouchableOpacity>
+                    </View>
                 )}
 
                 {callState === 'ringing' ? (
                     <View style={styles.ringerRow}>
-                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#10B981' }]} onPress={() => acceptCall(null)}>
+                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#10B981' }]} onPress={() => acceptCall(pendingOfferRef.current)}>
                             <Phone size={32} color="#FFF" />
                             <Text style={styles.bigBtnLabel}>Accept</Text>
                         </TouchableOpacity>
@@ -382,6 +467,7 @@ const styles = StyleSheet.create({
     name: { color: '#FFF', fontSize: 26, fontWeight: '700' },
     status: { color: 'rgba(255,255,255,0.7)', fontSize: 18 },
     controls: { alignItems: 'center', gap: 32, paddingHorizontal: 40, marginBottom: 40 },
+    midRow: { flexDirection: 'row', gap: 32 },
     ctrlBtn: { width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center' },
     ctrlLabel: { color: '#FFF', fontSize: 12, marginTop: 4 },
     ringerRow: { flexDirection: 'row', gap: 60 },

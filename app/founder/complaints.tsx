@@ -187,7 +187,11 @@ export default function ViewComplaints() {
                     </Text>
 
                     <View style={[styles.footer, { borderTopColor: colors.border }]}>
-                        <Text style={[styles.contact, { color: colors.text }]}>{item.contactInfo}</Text>
+                        {item.exposePhoneNumber && item.contactInfo ? (
+                            <Text style={[styles.contact, { color: '#10B981' }]}>📞 Direct Call: {item.contactInfo}</Text>
+                        ) : (
+                            <Text style={[styles.contact, { color: colors.textSecondary }]}>🔒 In-App Call & Chat Only</Text>
+                        )}
                     </View>
                 </Card>
             </TouchableOpacity>

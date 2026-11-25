@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Calendar, MapPin, Phone, MessageCircle } from 'lucide-react-native';
+import { Calendar, Lock, MapPin, Phone, PhoneCall, MessageCircle } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, useWindowDimensions, View, TouchableOpacity } from 'react-native';
+import { Image, Linking, ScrollView, StyleSheet, Text, useWindowDimensions, View, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
@@ -96,6 +96,16 @@ export default function ComplaintDetail() {
             const conv = await res.json();
             (router as any).push({ pathname: '/chat/[conversationId]', params: { conversationId: conv.id, otherName: (complaint as any).user?.name || 'User' } });
         } catch { showAlert('Error', 'Failed to open chat'); }
+    };
+
+    const handleDirectCall = () => {
+        if (!complaint?.contactInfo) return;
+        const cleanNumber = complaint.contactInfo.replace(/[^0-9+]/g, '');
+        if (cleanNumber) {
+            Linking.openURL(`tel:${cleanNumber}`).catch(() => {
+                showAlert('Call Failed', `Unable to launch dialer. Number: ${complaint.contactInfo}`);
+            });
+        }
     };
 
     const handleCall = async () => {
@@ -215,23 +225,67 @@ export default function ComplaintDetail() {
                             </View>
                         </View>
 
-                        {/* In-app Message & Call -- no phone numbers exposed */}
+                        {/* Message & Direct Call (if victim exposed phone) or In-App Call */}
                         {complaint.userId && complaint.userId !== user?.id && (
-                            <View style={styles.actionRow}>
-                                <TouchableOpacity
-                                    style={[styles.actionBtn, { backgroundColor: colors.primary }]}
-                                    onPress={handleMessage}
-                                >
-                                    <MessageCircle size={20} color="#FFF" />
-                                    <Text style={styles.actionBtnText}>Message</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.actionBtn, { backgroundColor: '#10B981' }]}
-                                    onPress={handleCall}
-                                >
-                                    <Phone size={20} color="#FFF" />
-                                    <Text style={styles.actionBtnText}>Call</Text>
-                                </TouchableOpacity>
+                            <View style={{ marginTop: 8, gap: 10 }}>
+                                {complaint.exposePhoneNumber && complaint.contactInfo ? (
+                                    <>
+                                        <View style={[styles.infoRow, { marginBottom: 4, backgroundColor: '#10B98115', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#10B98140' }]}>
+                                            <PhoneCall size={18} color="#10B981" />
+                                            <Text style={{ color: '#059669', fontWeight: '700', fontSize: 14 }}>
+                                                Victim shared direct phone: {complaint.contactInfo}
+                                            </Text>
+                                        </View>
+                                        <View style={styles.actionRow}>
+                                            <TouchableOpacity
+                                                style={[styles.actionBtn, { backgroundColor: colors.primary }]}
+                                                onPress={handleMessage}
+                                            >
+                                                <MessageCircle size={20} color="#FFF" />
+                                                <Text style={styles.actionBtnText}>Message</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={[styles.actionBtn, { backgroundColor: '#10B981' }]}
+                                                onPress={handleDirectCall}
+                                            >
+                                                <PhoneCall size={20} color="#FFF" />
+                                                <Text style={styles.actionBtnText}>Direct Call</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                        <TouchableOpacity
+                                            style={[styles.actionBtn, { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, paddingVertical: 10 }]}
+                                            onPress={handleCall}
+                                        >
+                                            <Phone size={16} color={colors.textSecondary} />
+                                            <Text style={[styles.actionBtnText, { color: colors.textSecondary, fontSize: 13 }]}>Or Start In-App Voice Call</Text>
+                                        </TouchableOpacity>
+                                    </>
+                                ) : (
+                                    <>
+                                        <View style={[styles.infoRow, { marginBottom: 4, alignItems: 'center' }]}>
+                                            <Lock size={14} color={colors.textSecondary} />
+                                            <Text style={{ color: colors.textSecondary, fontSize: 12 }}>
+                                                Phone number is kept private — use In-App Message or Call
+                                            </Text>
+                                        </View>
+                                        <View style={styles.actionRow}>
+                                            <TouchableOpacity
+                                                style={[styles.actionBtn, { backgroundColor: colors.primary }]}
+                                                onPress={handleMessage}
+                                            >
+                                                <MessageCircle size={20} color="#FFF" />
+                                                <Text style={styles.actionBtnText}>Message</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={[styles.actionBtn, { backgroundColor: '#10B981' }]}
+                                                onPress={handleCall}
+                                            >
+                                                <Phone size={20} color="#FFF" />
+                                                <Text style={styles.actionBtnText}>In-App Call</Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    </>
+                                )}
                             </View>
                         )}
                     </View>

@@ -8,6 +8,7 @@ import CategoryPicker from '../../components/CategoryPicker';
 import LocationPicker from '../../components/LocationPicker';
 import DatePicker from '../../components/DatePicker';
 import CustomImagePicker from '../../components/ImagePicker';
+import ContactPhoneCard from '../../components/ContactPhoneCard';
 import Input from '../../components/Input';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -30,7 +31,9 @@ export default function FileComplaint() {
 
     // Notification target state
     const [notificationType, setNotificationType] = useState<'RADIUS' | 'COMMUNITY' | 'ORGANIZATION'>('RADIUS');
-    const [notifyRadius, setNotifyRadius] = useState('1');
+    const [notifyRadius, setNotifyRadius] = useState('5');
+    const [contactInfo, setContactInfo] = useState('');
+    const [exposePhoneNumber, setExposePhoneNumber] = useState(false);
     const [selectedCommunity, setSelectedCommunity] = useState<any | null>(null);
     const [selectedOrg, setSelectedOrg] = useState<any | null>(null);
 
@@ -153,8 +156,10 @@ export default function FileComplaint() {
                 description: form.description,
                                 imageUris: base64Images,
                 userId: user?.id,
+                contactInfo: contactInfo.trim() || undefined,
+                exposePhoneNumber: Boolean(exposePhoneNumber && contactInfo.trim()),
                 cashPrize: cashPrize.trim() || undefined,
-                notifyRadius: notificationType === 'RADIUS' ? Math.min(Math.max(parseInt(notifyRadius) || 1, 1), 10) : undefined,
+                notifyRadius: notificationType === 'RADIUS' ? Math.min(Math.max(parseInt(notifyRadius) || 5, 1), 10) : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? selectedCommunity?.id : undefined,
                 targetOrganizationId: notificationType === 'ORGANIZATION' ? selectedOrg?.id : undefined,
                 latitude: locationCoords?.lat,
@@ -227,6 +232,13 @@ export default function FileComplaint() {
                             onChangeText={(text) => setForm({ ...form, description: text })}
                             multiline
                             numberOfLines={5}
+                        />
+
+                        <ContactPhoneCard
+                            phone={contactInfo}
+                            onChangePhone={setContactInfo}
+                            exposePhone={exposePhoneNumber}
+                            onToggleExpose={setExposePhoneNumber}
                         />
 
                         <CustomImagePicker

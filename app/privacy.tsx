@@ -166,7 +166,7 @@ export default function PrivacyPolicyScreen() {
                     </Text>
                     <Text style={[styles.paragraph, { color: colors.textSecondary }]}>
                         2. <Text style={{ fontWeight: '700', color: colors.text }}>Account Erasure: </Text>
-                        You can request full account deletion via Settings -> Delete Account. This permanently removes your profile, complaints, images, and chat logs from our active databases.
+                        You can request full account deletion via Settings → Delete Account. This permanently removes your profile, complaints, images, and chat logs from our active databases.
                     </Text>
                 </View>
 

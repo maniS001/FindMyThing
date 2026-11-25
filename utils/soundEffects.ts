@@ -1,17 +1,32 @@
-// Robust Sound Effects Service for Web and Mobile
+// Common Sound Effects Service for Web (HTMLAudio + WebAudio) & Native App (expo-audio)
+import { Platform } from 'react-native';
+
+let expoAudioModule: any = null;
+if (Platform.OS !== 'web') {
+    try {
+        expoAudioModule = require('expo-audio');
+    } catch (e) {
+        console.warn('[SoundEffects] expo-audio unavailable:', e);
+    }
+}
+
+const nativeRingbackAsset = Platform.OS !== 'web' ? require('../assets/sounds/ringback.wav') : null;
+const nativeRingtoneAsset = Platform.OS !== 'web' ? require('../assets/sounds/ringtone.wav') : null;
 
 class SoundEffectsService {
     private audioCtx: AudioContext | null = null;
     private ringbackAudio: HTMLAudioElement | null = null;
     private ringtoneAudio: HTMLAudioElement | null = null;
+    private nativeRingbackPlayer: any = null;
+    private nativeRingtonePlayer: any = null;
     private isRingbackPlaying = false;
     private isRingtonePlaying = false;
     private ringbackTimer: any = null;
     private ringtoneTimer: any = null;
-    private isUnlocked = false;
+    private speakerOn = false;
 
     constructor() {
-        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof document !== 'undefined') {
             // One-time gesture listener to unlock AudioContext & HTMLAudio on mobile browsers
             const unlock = () => {
                 this.unlockAudio();
@@ -26,13 +41,11 @@ class SoundEffectsService {
     }
 
     /**
-     * Proactively unlocks audio on the first user interaction
+     * Proactively unlocks audio on the first user interaction (Web)
      */
     unlockAudio() {
-        if (typeof window === 'undefined') return;
-        this.isUnlocked = true;
+        if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
-        // 1. Unlock Web Audio Context
         try {
             const ctx = this.getAudioContext();
             if (ctx && ctx.state === 'suspended') {
@@ -40,23 +53,41 @@ class SoundEffectsService {
             }
         } catch {}
 
-        // 2. Pre-create HTMLAudio elements
         try {
-            if (!this.ringbackAudio) {
-                this.ringbackAudio = new Audio('/sounds/ringback.wav');
-                this.ringbackAudio.loop = true;
-                this.ringbackAudio.preload = 'auto';
-            }
-            if (!this.ringtoneAudio) {
-                this.ringtoneAudio = new Audio('/sounds/ringtone.wav');
-                this.ringtoneAudio.loop = true;
-                this.ringtoneAudio.preload = 'auto';
+            if (typeof Audio !== 'undefined') {
+                if (!this.ringbackAudio) {
+                    this.ringbackAudio = new Audio('/sounds/ringback.wav');
+                    this.ringbackAudio.loop = true;
+                    this.ringbackAudio.preload = 'auto';
+                }
+                if (!this.ringtoneAudio) {
+                    this.ringtoneAudio = new Audio('/sounds/ringtone.wav');
+                    this.ringtoneAudio.loop = true;
+                    this.ringtoneAudio.preload = 'auto';
+                }
             }
         } catch {}
     }
 
+    async setSpeaker(enabled: boolean) {
+        this.speakerOn = enabled;
+        if (Platform.OS !== 'web' && expoAudioModule?.setAudioModeAsync) {
+            try {
+                await expoAudioModule.setAudioModeAsync({
+                    playsInSilentMode: true,
+                    allowsRecording: false,
+                    interruptionMode: 'doNotMix',
+                    shouldPlayInBackground: true,
+                    shouldRouteThroughEarpiece: !enabled,
+                });
+            } catch (err) {
+                console.warn('[SoundEffects] setSpeaker audio mode error:', err);
+            }
+        }
+    }
+
     private getAudioContext(): AudioContext | null {
-        if (typeof window === 'undefined') return null;
+        if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
         if (!this.audioCtx) {
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             if (AudioContextClass) {
@@ -67,15 +98,43 @@ class SoundEffectsService {
     }
 
     /**
-     * Start playing standard telephone ringback tone for caller side
+     * Start playing common telephone ringback tone for caller side (Native + Web)
      */
     async startRingback() {
         if (this.isRingbackPlaying) return;
         this.stopAll();
         this.isRingbackPlaying = true;
 
-        // Method 1: HTML5 Audio element (most reliable for loop playback on mobile browsers)
-        if (typeof window !== 'undefined') {
+        // Native Mobile App via expo-audio
+        if (Platform.OS !== 'web') {
+            if (expoAudioModule?.createAudioPlayer && nativeRingbackAsset) {
+                try {
+                    if (expoAudioModule.setAudioModeAsync) {
+                        await expoAudioModule.setAudioModeAsync({
+                            playsInSilentMode: true,
+                            allowsRecording: false,
+                            interruptionMode: 'doNotMix',
+                            shouldPlayInBackground: true,
+                            shouldRouteThroughEarpiece: !this.speakerOn,
+                        });
+                    }
+                    if (!this.nativeRingbackPlayer) {
+                        this.nativeRingbackPlayer = expoAudioModule.createAudioPlayer(nativeRingbackAsset);
+                    }
+                    this.nativeRingbackPlayer.loop = true;
+                    this.nativeRingbackPlayer.volume = 1.0;
+                    await this.nativeRingbackPlayer.seekTo(0).catch(() => {});
+                    this.nativeRingbackPlayer.play();
+                    console.log('[SoundEffects] Native ringback started');
+                } catch (err) {
+                    console.warn('[SoundEffects] Native ringback failed:', err);
+                }
+            }
+            return;
+        }
+
+        // Web via HTML5 Audio + WebAudio fallback
+        if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
             try {
                 if (!this.ringbackAudio) {
                     this.ringbackAudio = new Audio('/sounds/ringback.wav');
@@ -90,12 +149,9 @@ class SoundEffectsService {
                     });
                 }
                 return;
-            } catch {
-                // fallback to synth
-            }
+            } catch {}
         }
 
-        // Method 2: Web Audio Synthesizer fallback
         this.playRingbackSynth();
     }
 
@@ -146,6 +202,12 @@ class SoundEffectsService {
 
     stopRingback() {
         this.isRingbackPlaying = false;
+        if (this.nativeRingbackPlayer) {
+            try {
+                this.nativeRingbackPlayer.pause();
+                this.nativeRingbackPlayer.seekTo(0).catch(() => {});
+            } catch {}
+        }
         if (this.ringbackAudio) {
             try {
                 this.ringbackAudio.pause();
@@ -159,15 +221,43 @@ class SoundEffectsService {
     }
 
     /**
-     * Start playing melodic incoming call ringtone on receiver side
+     * Start playing common incoming call ringtone for receiver side (Native + Web)
      */
     async startRingtone() {
         if (this.isRingtonePlaying) return;
         this.stopAll();
         this.isRingtonePlaying = true;
 
-        // Method 1: HTML5 Audio element
-        if (typeof window !== 'undefined') {
+        // Native Mobile App via expo-audio (plays loud over speakerphone)
+        if (Platform.OS !== 'web') {
+            if (expoAudioModule?.createAudioPlayer && nativeRingtoneAsset) {
+                try {
+                    if (expoAudioModule.setAudioModeAsync) {
+                        await expoAudioModule.setAudioModeAsync({
+                            playsInSilentMode: true,
+                            allowsRecording: false,
+                            interruptionMode: 'doNotMix',
+                            shouldPlayInBackground: true,
+                            shouldRouteThroughEarpiece: false,
+                        });
+                    }
+                    if (!this.nativeRingtonePlayer) {
+                        this.nativeRingtonePlayer = expoAudioModule.createAudioPlayer(nativeRingtoneAsset);
+                    }
+                    this.nativeRingtonePlayer.loop = true;
+                    this.nativeRingtonePlayer.volume = 1.0;
+                    await this.nativeRingtonePlayer.seekTo(0).catch(() => {});
+                    this.nativeRingtonePlayer.play();
+                    console.log('[SoundEffects] Native ringtone started');
+                } catch (err) {
+                    console.warn('[SoundEffects] Native ringtone failed:', err);
+                }
+            }
+            return;
+        }
+
+        // Web via HTML5 Audio + WebAudio fallback
+        if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
             try {
                 if (!this.ringtoneAudio) {
                     this.ringtoneAudio = new Audio('/sounds/ringtone.wav');
@@ -182,12 +272,9 @@ class SoundEffectsService {
                     });
                 }
                 return;
-            } catch {
-                // fallback to synth
-            }
+            } catch {}
         }
 
-        // Method 2: Web Audio Synthesizer fallback
         this.playRingtoneSynth();
     }
 
@@ -244,6 +331,12 @@ class SoundEffectsService {
 
     stopRingtone() {
         this.isRingtonePlaying = false;
+        if (this.nativeRingtonePlayer) {
+            try {
+                this.nativeRingtonePlayer.pause();
+                this.nativeRingtonePlayer.seekTo(0).catch(() => {});
+            } catch {}
+        }
         if (this.ringtoneAudio) {
             try {
                 this.ringtoneAudio.pause();

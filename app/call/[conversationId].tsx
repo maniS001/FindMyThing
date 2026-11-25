@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     RTCPeerConnection, RTCSessionDescription, RTCIceCandidate,
     mediaDevices, MediaStream
 } from 'react-native-webrtc';
 import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, ChevronDown } from 'lucide-react-native';
+import { API_URL } from '../../constants/api';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useCall } from '../../contexts/CallContext';
 import chatService, { WSPayload } from '../../services/chatService';
@@ -23,17 +25,20 @@ const ICE_SERVERS = {
 type CallState = 'connecting' | 'ringing' | 'active' | 'ended' | 'rejected';
 
 export default function CallScreen() {
-    const { conversationId, otherName, isInitiator, incomingSdp } = useLocalSearchParams<{
+    const { conversationId, otherName, isInitiator, incomingSdp, callRequestId, autoAccept } = useLocalSearchParams<{
         conversationId: string;
-        otherName: string;
-        isInitiator: string;
-        incomingSdp: string;
+        otherName?: string;
+        isInitiator?: string;
+        incomingSdp?: string;
+        callRequestId?: string;
+        autoAccept?: string;
     }>();
     const { colors } = useTheme();
-    const { activeCall, setActiveCall, updateCall, endActiveCall } = useCall();
+    const { activeCall, setActiveCall, updateCall } = useCall();
     const router = useRouter();
     const initiator = isInitiator === 'true';
 
+    const [displayName, setDisplayName] = useState(otherName || 'User');
     const [callState, setCallState] = useState<CallState>(initiator ? 'connecting' : 'ringing');
     const [muted, setMuted] = useState(false);
     const [speakerOn, setSpeakerOn] = useState(false);
@@ -43,8 +48,10 @@ export default function CallScreen() {
     const localStreamRef = useRef<MediaStream | null>(null);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const isExplicitlyEnded = useRef(false);
+    const pendingOfferRef = useRef<any>(null);
+    const pendingIceRef = useRef<any[]>([]);
+    const activeCallReqIdRef = useRef<string | undefined>(callRequestId);
 
-    // Audio ringback for caller
     const startCallerRinging = () => {
         soundEffects.startRingback();
     };
@@ -52,7 +59,6 @@ export default function CallScreen() {
         soundEffects.stopAll();
     };
 
-    // ============ Setup PeerConnection ============
     const setupPC = useCallback(async () => {
         const pc = new RTCPeerConnection(ICE_SERVERS as any);
         pcRef.current = pc;
@@ -93,11 +99,37 @@ export default function CallScreen() {
         return pc;
     }, [conversationId, updateCall]);
 
-    // ============ Initiator: Create and send offer ============
+    const acceptCall = useCallback(async (incomingOffer: any, bufferedIce: any[] = []) => {
+        const offerToUse = incomingOffer || pendingOfferRef.current;
+        if (!offerToUse) {
+            console.warn('[WebRTC Native] No SDP offer available to accept');
+            return;
+        }
+        stopRinging();
+        const pc = await setupPC();
+        await pc.setRemoteDescription(new RTCSessionDescription(offerToUse) as any);
+
+        const iceList = bufferedIce.length > 0 ? bufferedIce : pendingIceRef.current;
+        for (const cand of iceList) {
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand) as any);
+            } catch {}
+        }
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer as any);
+        chatService.sendCallAnswer(conversationId, answer);
+        setCallState('active');
+        updateCall({ status: 'active' });
+        if (!timerRef.current) {
+            timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
+        }
+    }, [conversationId, setupPC, updateCall]);
+
     useEffect(() => {
         setActiveCall({
             conversationId,
-            otherName: otherName || 'User',
+            otherName: displayName,
             isInitiator: initiator,
             status: initiator ? 'connecting' : 'ringing',
             duration: 0,
@@ -114,15 +146,53 @@ export default function CallScreen() {
                 chatService.sendCallOffer(conversationId, offer);
             })();
         } else {
-            // Recipient: Accept immediately if SDP is passed
             const raw = incomingSdp || activeCall?.incomingSdp;
             if (raw) {
                 try {
                     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    pendingOfferRef.current = parsed;
                     acceptCall(parsed);
                 } catch (e) {
                     console.error('[WebRTC Native] Failed to parse incoming SDP', e);
                 }
+            } else {
+                // Launched from background / closed push notification — recover SDP & buffered ICE candidates
+                (async () => {
+                    try {
+                        chatService.connect();
+                        const token = await AsyncStorage.getItem('token');
+                        if (!token) return;
+                        const res = await fetch(`${API_URL}/calls/conversation/${conversationId}/pending`, {
+                            headers: { Authorization: `Bearer ${token}` },
+                        });
+                        if (!res.ok) return;
+                        const data = await res.json();
+                        if (data?.call?.sdp) {
+                            activeCallReqIdRef.current = data.call.callRequestId;
+                            if (data.call.senderName) {
+                                setDisplayName(data.call.senderName);
+                                updateCall({ otherName: data.call.senderName });
+                            }
+                            pendingOfferRef.current = data.call.sdp;
+                            pendingIceRef.current = data.call.iceCandidates || [];
+                            if (autoAccept === 'true') {
+                                acceptCall(data.call.sdp, data.call.iceCandidates || []);
+                            } else {
+                                setCallState('ringing');
+                                soundEffects.startRingtone();
+                            }
+                        } else {
+                            setCallState('ended');
+                            updateCall({ status: 'ended' });
+                            setTimeout(() => {
+                                setActiveCall(null);
+                                router.back();
+                            }, 1500);
+                        }
+                    } catch (e) {
+                        console.error('[WebRTC Native] Recovery from notification failed:', e);
+                    }
+                })();
             }
         }
 
@@ -134,21 +204,6 @@ export default function CallScreen() {
         };
     }, []);
 
-    const acceptCall = useCallback(async (incomingOffer: any) => {
-        stopRinging();
-        const pc = await setupPC();
-        await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer) as any);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer as any);
-        chatService.sendCallAnswer(conversationId, answer);
-        setCallState('active');
-        updateCall({ status: 'active' });
-        if (!timerRef.current) {
-            timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
-        }
-    }, [conversationId, setupPC, updateCall]);
-
-    // ============ WS Event Listeners ============
     useEffect(() => {
         const handleAnswer = async (payload: WSPayload) => {
             if (payload.conversationId !== conversationId) return;
@@ -162,8 +217,12 @@ export default function CallScreen() {
         };
 
         const handleIce = async (payload: WSPayload) => {
-            if (payload.conversationId !== conversationId) return;
-            try { await pcRef.current?.addIceCandidate(new RTCIceCandidate(payload.candidate) as any); } catch {}
+            if (payload.conversationId !== conversationId || !payload.candidate) return;
+            if (pcRef.current?.remoteDescription) {
+                try { await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate) as any); } catch {}
+            } else {
+                pendingIceRef.current.push(payload.candidate);
+            }
         };
 
         const handleEnded = (payload: WSPayload) => {
@@ -205,10 +264,20 @@ export default function CallScreen() {
         };
     }, [conversationId, updateCall, setActiveCall]);
 
-    // ============ Controls ============
-    const handleEndCall = useCallback(() => {
+    const handleEndCall = useCallback(async () => {
         isExplicitlyEnded.current = true;
         chatService.endCall(conversationId);
+        if (activeCallReqIdRef.current) {
+            try {
+                const token = await AsyncStorage.getItem('token');
+                if (token) {
+                    await fetch(`${API_URL}/calls/${activeCallReqIdRef.current}/end`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}` },
+                    });
+                }
+            } catch {}
+        }
         cleanup(true);
         setCallState('ended');
         updateCall({ status: 'ended' });
@@ -218,9 +287,20 @@ export default function CallScreen() {
         }, 800);
     }, [conversationId, updateCall, setActiveCall]);
 
-    const handleRejectCall = useCallback(() => {
+    const handleRejectCall = useCallback(async () => {
         isExplicitlyEnded.current = true;
         chatService.rejectCall(conversationId);
+        if (activeCallReqIdRef.current) {
+            try {
+                const token = await AsyncStorage.getItem('token');
+                if (token) {
+                    await fetch(`${API_URL}/calls/${activeCallReqIdRef.current}/reject`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}` },
+                    });
+                }
+            } catch {}
+        }
         cleanup(true);
         setCallState('rejected');
         updateCall({ status: 'rejected' });
@@ -234,13 +314,17 @@ export default function CallScreen() {
         const stream = localStreamRef.current;
         if (stream) {
             stream.getAudioTracks().forEach((t: any) => { t.enabled = !t.enabled; });
-            setMuted(m => !m);
-            updateCall({ muted: !muted });
         }
+        setMuted(m => !m);
+        updateCall({ muted: !muted });
     }, [muted, updateCall]);
 
     const toggleSpeaker = useCallback(() => {
-        setSpeakerOn(s => !s);
+        setSpeakerOn(s => {
+            const next = !s;
+            soundEffects.setSpeaker(next);
+            return next;
+        });
     }, []);
 
     const cleanup = (sendSignal: boolean) => {
@@ -263,7 +347,6 @@ export default function CallScreen() {
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: '#0F172A' }]}>
-            {/* Header bar with minimize */}
             <View style={styles.headerBar}>
                 <TouchableOpacity
                     style={styles.minimizeBtn}
@@ -276,23 +359,20 @@ export default function CallScreen() {
                 <View style={{ width: 40 }} />
             </View>
 
-            {/* Caller info */}
             <View style={styles.top}>
                 <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{(otherName || '?')[0].toUpperCase()}</Text>
+                    <Text style={styles.avatarText}>{(displayName || '?')[0].toUpperCase()}</Text>
                 </View>
-                <Text style={styles.name}>{otherName}</Text>
+                <Text style={styles.name}>{displayName}</Text>
                 <Text style={[styles.status, callState === 'active' && { color: '#10B981', fontWeight: '700' }]}>
                     {stateLabels[callState]}
                 </Text>
                 {callState === 'connecting' && (
-                    <Text style={styles.hint}>Waiting for {otherName} to answer...</Text>
+                    <Text style={styles.hint}>Waiting for {displayName} to answer...</Text>
                 )}
             </View>
 
-            {/* Controls */}
             <View style={styles.controls}>
-                {/* Mute + Speaker row (available during calling & active) */}
                 {(callState === 'connecting' || callState === 'active') && (
                     <View style={styles.midRow}>
                         <TouchableOpacity
@@ -313,10 +393,9 @@ export default function CallScreen() {
                     </View>
                 )}
 
-                {/* Bottom action button */}
                 {callState === 'ringing' ? (
                     <View style={styles.ringerRow}>
-                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#10B981' }]} onPress={() => acceptCall(null)}>
+                        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: '#10B981' }]} onPress={() => acceptCall(pendingOfferRef.current)}>
                             <Phone size={34} color="#FFF" />
                             <Text style={styles.bigBtnLabel}>Accept</Text>
                         </TouchableOpacity>

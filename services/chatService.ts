@@ -1,5 +1,6 @@
 import { WS_URL } from '../constants/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, Platform } from 'react-native';
 
 export type WSMessageType =
     | 'AUTH'
@@ -10,6 +11,7 @@ export type WSMessageType =
     | 'MESSAGE_DELIVERED'
     | 'MESSAGE_READ'
     | 'MESSAGES_READ'
+    | 'NEW_NOTIFICATION'
     | 'CALL_OFFER'
     | 'CALL_ANSWER'
     | 'ICE_CANDIDATE'
@@ -26,6 +28,7 @@ export interface WSPayload {
     messageId?: string;
     senderId?: string;
     senderName?: string;
+    createdAt?: string;
     sdp?: any;
     candidate?: any;
     callRequestId?: string;
@@ -33,6 +36,10 @@ export interface WSPayload {
     delivered?: boolean;
     read?: boolean;
     readBy?: string;
+    title?: string;
+    message?: string;
+    url?: string;
+    notificationType?: string;
 }
 
 type MessageHandler = (payload: WSPayload) => void;
@@ -44,20 +51,29 @@ class ChatService {
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private isConnected = false;
     private pendingQueue: WSPayload[] = [];
-    private initializedListeners = false;
 
     constructor() {
-        // Auto-reconnect when user returns to tab / unlocks phone
-        if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        // Web visibility & network listeners
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible' && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
-                    console.log('[ChatService] App visible again. Re-verifying WebSocket connection...');
+                    console.log('[ChatService] Web tab visible again. Re-connecting WebSocket...');
                     this.connect();
                 }
             });
             window.addEventListener('online', () => {
                 console.log('[ChatService] Network back online. Reconnecting WebSocket...');
                 this.connect();
+            });
+        }
+
+        // Native iOS / Android foreground recovery listener
+        if (Platform.OS !== 'web') {
+            AppState.addEventListener('change', (nextState) => {
+                if (nextState === 'active' && (!this.ws || this.ws.readyState !== WebSocket.OPEN)) {
+                    console.log('[ChatService] Native app active. Reconnecting WebSocket...');
+                    this.connect();
+                }
             });
         }
     }
@@ -73,14 +89,11 @@ class ChatService {
             this.ws.onopen = () => {
                 this.isConnected = true;
                 if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-                // Authenticate immediately
                 this.rawSend({ type: 'AUTH', token: token! });
-                // Flush queued messages
                 this.pendingQueue.forEach(m => this.rawSend(m));
                 this.pendingQueue = [];
                 console.log('[ChatService] WebSocket connected');
 
-                // Start 20s heartbeat to keep connection alive through Render/proxies
                 if (this.pingTimer) clearInterval(this.pingTimer);
                 this.pingTimer = setInterval(() => {
                     if (this.ws?.readyState === WebSocket.OPEN) {
@@ -130,10 +143,11 @@ class ChatService {
     };
 
     send = (payload: WSPayload) => {
-        if (this.isConnected) {
+        if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
             this.rawSend(payload);
         } else {
             this.pendingQueue.push(payload);
+            this.connect();
         }
     };
 
@@ -186,6 +200,5 @@ class ChatService {
     };
 }
 
-// Singleton export
 const chatService = new ChatService();
 export default chatService;
