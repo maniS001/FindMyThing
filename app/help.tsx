@@ -70,6 +70,30 @@ function getClientFallbackAnswer(query: string): string {
     return `👋 I am FindBot, your FindMyThing AI Assistant!\n\nI can help you with:\n• Immediate steps if you lost your phone, wallet, documents, or keys\n• How to verify true owners and prevent fake claims\n• Safe public handover instructions and QR verification\n• Troubleshooting calls, chat, and location alerts\n• Reporting fraud or suspicious activity\n\nFeel free to type your question or select one of the suggestions above!`;
 }
 
+function formatBotReply(raw: string): string {
+    const trimmed = (raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    if (trimmed.startsWith('{')) {
+        try {
+            const parsed: any = JSON.parse(trimmed);
+            const root = parsed.response || parsed;
+            const parts: string[] = [];
+            const mainText = root.text || root.message || root.reply || root.answer;
+            if (typeof mainText === 'string' && mainText.trim()) parts.push(mainText.trim());
+            const items = root.actions || root.steps || root.bullets || [];
+            if (Array.isArray(items)) {
+                for (const item of items) {
+                    if (typeof item === 'string' && item.trim()) parts.push(`• ${item.trim()}`);
+                    else if (item && typeof item === 'object' && (item.text || item.label || item.description)) {
+                        parts.push(`• ${String(item.text || item.label || item.description).trim()}`);
+                    }
+                }
+            }
+            if (parts.length > 0) return parts.join('\n\n');
+        } catch {}
+    }
+    return trimmed;
+}
+
 export default function HelpScreen() {
     const router = useRouter();
     const { colors } = useTheme();
@@ -130,7 +154,7 @@ export default function HelpScreen() {
                         {
                             id: `bot-${Date.now()}`,
                             sender: 'bot',
-                            text: data.reply,
+                            text: formatBotReply(data.reply),
                             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                         },
                     ]);

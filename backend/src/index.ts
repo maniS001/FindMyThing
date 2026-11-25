@@ -446,32 +446,36 @@ const GEMINI_MODELS = [
     'gemini-1.5-flash',
 ];
 
-const getGeminiModel = (modelIndex = 0) => {
+const getGeminiModel = (modelIndex = 0, jsonMode = true) => {
     if (!geminiClient) throw new Error('GEMINI_API_KEY not configured');
     const modelName = GEMINI_MODELS[modelIndex] || GEMINI_MODELS[0];
     return geminiClient.getGenerativeModel({
         model: modelName,
         generationConfig: {
-            responseMimeType: "application/json",
+            responseMimeType: jsonMode ? "application/json" : "text/plain",
         },
-        systemInstruction: `You are the dedicated AI Agent for FindMyThing, a modern Lost & Found application.
+        systemInstruction: jsonMode
+            ? `You are the dedicated AI Agent for FindMyThing, a modern Lost & Found application.
 Your primary goals are to:
 1. Ensure all lost and found item reports are logically consistent, genuine, and high quality.
 2. Strictly protect user privacy by blocking any attempts to share phone numbers, emails, or social media handles in public descriptions.
 3. Prevent fraud by carefully analyzing the context of claims and security questions.
 Always respond exactly in the requested JSON format without markdown formatting.`
+            : `You are FindBot, a helpful, empathetic customer support assistant for the FindMyThing lost-and-found app.
+Always reply in clean, friendly, plain conversational text using numbered steps or bullet points (•).
+NEVER output JSON, curly braces, or code blocks.`
     });
 };
 
 // ============= AI Validation Endpoints =============
 
 // Robust Gemini call — tries each model in fallback order
-async function callGemini(prompt: string): Promise<string> {
+async function callGemini(prompt: string, jsonMode = true): Promise<string> {
     if (!geminiClient) throw new Error('GEMINI_API_KEY not configured');
     let lastErr: any;
     for (let i = 0; i < GEMINI_MODELS.length; i++) {
         try {
-            const model = getGeminiModel(i);
+            const model = getGeminiModel(i, jsonMode);
             const result = await model.generateContent(prompt);
             return result.response.text().trim();
         } catch (err: any) {
@@ -793,6 +797,30 @@ Here is how I can assist you:
 - Need urgent advice? Ask me about: "Lost wallet", "Lost phone", "How to verify ownership", "Secure QR handover", or "Safety tips".`;
 }
 
+function formatPlainSupportReply(raw: string): string {
+    const trimmed = (raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    if (trimmed.startsWith('{')) {
+        try {
+            const parsed: any = JSON.parse(trimmed);
+            const parts: string[] = [];
+            const root = parsed.response || parsed;
+            const mainText = root.text || root.message || root.reply || root.answer;
+            if (typeof mainText === 'string' && mainText.trim()) parts.push(mainText.trim());
+            const items = root.actions || root.steps || root.bullets || [];
+            if (Array.isArray(items)) {
+                for (const item of items) {
+                    if (typeof item === 'string' && item.trim()) parts.push(`• ${item.trim()}`);
+                    else if (item && typeof item === 'object' && (item.text || item.label || item.description)) {
+                        parts.push(`• ${String(item.text || item.label || item.description).trim()}`);
+                    }
+                }
+            }
+            if (parts.length > 0) return parts.join('\n\n');
+        } catch {}
+    }
+    return trimmed;
+}
+
 app.post('/api/ai/support-assistant', async (req, res) => {
     try {
         const { message, history } = req.body;
@@ -826,7 +854,8 @@ Respond directly:`;
 
         let reply;
         try {
-            reply = await callGemini(prompt);
+            reply = await callGemini(prompt, false);
+            reply = formatPlainSupportReply(reply);
         } catch (aiErr: any) {
             console.warn('Gemini support bot call failed, falling back to rule-based assistant:', aiErr.message);
             reply = getFallbackSupportResponse(message);

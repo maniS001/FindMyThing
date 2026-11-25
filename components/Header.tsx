@@ -47,11 +47,11 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
     };
 
     const menuItems: MenuItem[] = [
-        { icon: <MessageCircle size={20} color={colors.text} />, label: 'Messages', route: '/chat' },
         { icon: <User size={20} color={colors.text} />, label: 'Account Details', route: '/account' },
+        { icon: <Settings size={20} color={colors.text} />, label: 'Settings', route: '/settings' },
+        { icon: <MessageCircle size={20} color={colors.text} />, label: 'Messages', route: '/chat' },
         { icon: <BookOpen size={20} color={colors.text} />, label: 'App Manual', route: '/manual' },
         { icon: <HelpCircle size={20} color={colors.text} />, label: 'Help & Support', route: '/help' },
-        { icon: <Settings size={20} color={colors.text} />, label: 'Settings', route: '/settings' },
     ];
 
     const handleMenuItemPress = (route: string) => {
@@ -62,7 +62,7 @@ export default function Header({ forceShow = false }: { forceShow?: boolean } = 
     };
 
     const hideHeaderRoutes = ['/auth/login', '/account', '/settings', '/about', '/notifications', '/success', '/founder/complaints', '/manual', '/help', '/privacy', '/terms'];
-    if (!forceShow && hideHeaderRoutes.includes(pathname)) return null;
+    if (hideHeaderRoutes.includes(pathname)) return null;
 
     return (
         <SafeAreaView edges={['top']} style={{ backgroundColor: colors.headerBackground }}>
