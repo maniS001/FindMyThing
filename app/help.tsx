@@ -98,6 +98,44 @@ export default function HelpScreen() {
     const router = useRouter();
     const { colors } = useTheme();
     const scrollViewRef = useRef<ScrollView>(null);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+    // Native keyboard listener (iOS & Android)
+    useEffect(() => {
+        if (Platform.OS === 'web') return;
+        const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+        const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+        const showSub = Keyboard.addListener(showEvent, (e) => {
+            setKeyboardHeight(e.endCoordinates.height);
+            setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+        });
+        const hideSub = Keyboard.addListener(hideEvent, () => {
+            setKeyboardHeight(0);
+        });
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
+
+    // Mobile Web virtual keyboard listener
+    useEffect(() => {
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.visualViewport) {
+            const handleViewportChange = () => {
+                if (window.visualViewport) {
+                    const diff = window.innerHeight - window.visualViewport.height;
+                    setKeyboardHeight(diff > 80 ? diff : 0);
+                    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+                }
+            };
+            window.visualViewport.addEventListener('resize', handleViewportChange);
+            window.visualViewport.addEventListener('scroll', handleViewportChange);
+            return () => {
+                window.visualViewport?.removeEventListener('resize', handleViewportChange);
+                window.visualViewport?.removeEventListener('scroll', handleViewportChange);
+            };
+        }
+    }, []);
 
     const [messages, setMessages] = useState<Message[]>([
         {
@@ -181,7 +219,7 @@ export default function HelpScreen() {
     };
 
     return (
-        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
+        <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top', 'bottom', 'left', 'right']}>
             {/* Header */}
             <View style={[styles.header, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
@@ -205,10 +243,7 @@ export default function HelpScreen() {
                 </TouchableOpacity>
             </View>
 
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
+            <View style={{ flex: 1 }}>
                 {/* Chat Messages */}
                 <ScrollView
                     ref={scrollViewRef}
@@ -304,7 +339,7 @@ export default function HelpScreen() {
                 </ScrollView>
 
                 {/* Input Bar */}
-                <View style={[styles.inputContainer, { backgroundColor: colors.surface, borderTopColor: colors.border }]}>
+                <View style={[styles.inputContainer, { backgroundColor: colors.surface, borderTopColor: colors.border, marginBottom: keyboardHeight }]}>
                     <TextInput
                         style={[styles.textInput, { color: colors.text, backgroundColor: colors.background, borderColor: colors.border }]}
                         placeholder="Ask FindBot about any issue or feature..."
@@ -326,7 +361,7 @@ export default function HelpScreen() {
                         <Send size={18} color="#FFF" />
                     </TouchableOpacity>
                 </View>
-            </KeyboardAvoidingView>
+            </View>
         </SafeAreaView>
     );
 }

@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import {
     View, Text, StyleSheet, FlatList, TouchableOpacity,
-    ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView
+    ActivityIndicator, TextInput, Modal, KeyboardAvoidingView, Platform, ScrollView, Linking, Alert
 } from 'react-native';
 import { Plus, Users, UserPlus, X, Search, CheckCircle, XCircle, Lock, Globe, ChevronRight, ChevronDown, Share2 } from 'lucide-react-native';
 import { Share } from 'react-native';
@@ -227,21 +227,71 @@ export default function CommunitiesScreen() {
 
     const loadContacts = async () => {
         setLoadingContacts(true);
-        const { status } = await Contacts.requestPermissionsAsync();
-        if (status === 'granted') {
-            const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers] });
-            if (data.length > 0) {
-                // Filter contacts with phone numbers
-                const validContacts = data.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
-                setContactsList(validContacts);
-                setContactModalVisible(true);
-            } else {
-                showAlert('Info', 'No contacts found.');
+        try {
+            if (Platform.OS === 'web') {
+                const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
+                if (nav?.contacts && typeof nav.contacts.select === 'function') {
+                    const picked = await nav.contacts.select(['name', 'tel'], { multiple: true });
+                    if (Array.isArray(picked) && picked.length > 0) {
+                        const validContacts: Contacts.Contact[] = picked
+                            .filter((c: any) => Array.isArray(c.tel) && c.tel.length > 0)
+                            .map((c: any, idx: number) => ({
+                                id: `web-${idx}`,
+                                contactType: Contacts.ContactTypes.Person,
+                                name: (Array.isArray(c.name) && c.name[0]) || c.tel[0],
+                                phoneNumbers: c.tel.map((num: string, pIdx: number) => ({
+                                    id: `p-${idx}-${pIdx}`,
+                                    label: 'mobile',
+                                    number: num,
+                                })),
+                            }));
+                        if (validContacts.length > 0) {
+                            setContactsList(validContacts);
+                            setContactModalVisible(true);
+                        } else {
+                            showAlert('Info', 'No phone numbers found in selected contacts.');
+                        }
+                    }
+                } else {
+                    showAlert(
+                        'Phonebook Not Supported in Browser',
+                        'Your browser does not allow direct phonebook access. Please enter the phone number manually above or use "Share link to join".'
+                    );
+                }
+                return;
             }
-        } else {
-            showAlert('Error', 'Contacts permission denied.');
+
+            let perm = await Contacts.getPermissionsAsync();
+            if (perm.status !== 'granted') {
+                perm = await Contacts.requestPermissionsAsync();
+            }
+            if (perm.status === 'granted') {
+                const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers] });
+                const validContacts = data.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
+                if (validContacts.length > 0) {
+                    setContactsList(validContacts);
+                    setContactModalVisible(true);
+                } else {
+                    showAlert('Info', 'No contacts with phone numbers found.');
+                }
+            } else if (!perm.canAskAgain) {
+                Alert.alert(
+                    'Contacts Permission Required',
+                    'Please enable Contacts permission in your device App Settings to pick members from your phonebook.',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                    ]
+                );
+            } else {
+                showAlert('Permission Denied', 'Contacts permission was denied. You can also enter a phone number manually above.');
+            }
+        } catch (err: any) {
+            console.log('Load contacts error:', err?.message);
+            showAlert('Info', 'Unable to open phonebook on this device. Please enter the phone number manually above.');
+        } finally {
+            setLoadingContacts(false);
         }
-        setLoadingContacts(false);
     };
 
     const toggleContactSelection = (phone: string) => {

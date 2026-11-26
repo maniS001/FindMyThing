@@ -109,12 +109,44 @@ export const searchItems = async (query: string): Promise<Item[]> => {
     try {
         const token = await AsyncStorage.getItem('token');
         const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-        const response = await fetch(`${API_URL}/items?query=${encodeURIComponent(query)}&excludeClaimed=true`, { headers });
+        const response = await fetch(`${API_URL}/items?query=${encodeURIComponent(query.trim())}&excludeClaimed=true`, { headers });
         if (!response.ok) throw new Error('Failed to search items');
         return await response.json();
     } catch (error) {
         console.error('Error searching items:', error);
         return [];
+    }
+};
+
+export const aiSearchItems = async (criteria: {
+    name: string;
+    category?: string;
+    location?: string;
+    description?: string;
+}): Promise<Item[]> => {
+    const trimmedName = (criteria.name || '').trim();
+    try {
+        const token = await AsyncStorage.getItem('token');
+        const headers: HeadersInit = {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        };
+        const response = await fetch(`${API_URL}/items/ai-search`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                name: trimmedName,
+                category: (criteria.category || '').trim(),
+                location: (criteria.location || '').trim(),
+                description: (criteria.description || '').trim(),
+                excludeClaimed: true,
+            }),
+        });
+        if (!response.ok) return searchItems(trimmedName);
+        return await response.json();
+    } catch (error) {
+        console.error('Error in AI search:', error);
+        return searchItems(trimmedName);
     }
 };
 

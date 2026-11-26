@@ -157,7 +157,7 @@ export default function FileComplaint() {
                                 imageUris: base64Images,
                 userId: user?.id,
                 contactInfo: contactInfo.trim() || undefined,
-                exposePhoneNumber: Boolean(exposePhoneNumber && contactInfo.trim()),
+                exposePhoneNumber: Boolean(contactInfo.trim()),
                 cashPrize: cashPrize.trim() || undefined,
                 notifyRadius: notificationType === 'RADIUS' ? Math.min(Math.max(parseInt(notifyRadius) || 5, 1), 10) : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? selectedCommunity?.id : undefined,

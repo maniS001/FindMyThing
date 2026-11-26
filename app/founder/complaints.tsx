@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
 import { Calendar, MapPin, Search, SlidersHorizontal, X } from 'lucide-react-native';
-import { useEffect, useState, useRef } from 'react';
-import { Animated, ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Header from '../../components/Header';
 import Card from '../../components/Card';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -21,22 +21,6 @@ export default function ViewComplaints() {
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
-    const insets = useSafeAreaInsets();
-    const HEADER_HEIGHT = insets.top + 65;
-    const SCROLL_DISTANCE = 65; // Only translate by 65px so search bar stops below status bar
-    const [searchHeight, setSearchHeight] = useState(100);
-
-    const scrollY = useRef(new Animated.Value(0)).current;
-    const translateY = Animated.diffClamp(scrollY, 0, SCROLL_DISTANCE).interpolate({
-        inputRange: [0, SCROLL_DISTANCE],
-        outputRange: [0, -SCROLL_DISTANCE],
-        extrapolate: 'clamp',
-    });
-    const headerOpacity = translateY.interpolate({
-        inputRange: [-SCROLL_DISTANCE, 0],
-        outputRange: [0, 1],
-        extrapolate: 'clamp',
-    });
 
     // Filter state
     const [showFilters, setShowFilters] = useState(false);
@@ -200,24 +184,15 @@ export default function ViewComplaints() {
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
+            <Header forceShow />
+
             <KeyboardAvoidingView
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                style={{ flex: 1 }}
+                style={{ flex: 1, minHeight: 0 }}
             >
-                {/* Fixed Status Bar Background */}
-                <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: colors.headerBackground, zIndex: 30 }} />
-
-                {/* Animated Topbar */}
-                <Animated.View style={{ transform: [{ translateY }], position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20 }}>
-                    <Header forceShow />
-                </Animated.View>
-
-                {/* Animated Search Container */}
-                <Animated.View 
-                    onLayout={(e) => setSearchHeight(e.nativeEvent.layout.height)}
-                    style={{ transform: [{ translateY }], position: 'absolute', top: HEADER_HEIGHT, left: 0, right: 0, zIndex: 10, elevation: 10, alignItems: 'center' }}
-                >
-                    <View style={[styles.searchContainer, { width: '100%', maxWidth: 800, backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+                {/* Fixed Search & Filters Bar */}
+                <View style={{ width: '100%', backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border, alignItems: 'center', zIndex: 10 }}>
+                    <View style={[styles.searchContainer, { width: '100%', maxWidth: 800, backgroundColor: colors.surface, borderBottomWidth: 0 }]}>
                         <View style={styles.searchRow}>
                             <TextInput
                                 style={[styles.searchInput, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
@@ -334,28 +309,23 @@ export default function ViewComplaints() {
                         </View>
                     )}
                     </View>
-                </Animated.View>
+                </View>
 
                 {loading ? (
                     <View style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
                     </View>
                 ) : (
-                    <View style={{ flex: 1, width: '100%', maxWidth: 800, alignSelf: 'center' }}>
-                    <Animated.FlatList
+                    <View style={{ flex: 1, minHeight: 0, width: '100%', maxWidth: 800, alignSelf: 'center', overflow: 'hidden' }}>
+                    <FlatList
                         data={complaints}
                         renderItem={renderItem}
                         keyExtractor={item => item.id}
                         key={numColumns}
                         numColumns={numColumns}
-                        contentContainerStyle={[styles.list, { paddingTop: HEADER_HEIGHT + searchHeight + 16, paddingBottom: 100 }]}
+                        contentContainerStyle={[styles.list, { paddingTop: 16, paddingBottom: 24 }]}
                         columnWrapperStyle={numColumns > 1 ? styles.columnWrapper : undefined}
                         keyboardShouldPersistTaps="handled"
-                        onScroll={Animated.event(
-                            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-                            { useNativeDriver: true }
-                        )}
-                        scrollEventThrottle={16}
                         ListEmptyComponent={
                             <View style={styles.empty}>
                                 <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
@@ -370,7 +340,7 @@ export default function ViewComplaints() {
                     </View>
                 )}
 
-                <View style={[styles.bottomAction, { backgroundColor: colors.surface, borderBottomColor: colors.border, borderTopWidth: 1, position: 'absolute', bottom: 0, left: 0, right: 0 }]}>
+                <View style={[styles.bottomAction, { backgroundColor: colors.surface, borderTopColor: colors.border, borderTopWidth: 1 }]}>
                     <SafeAreaView edges={['bottom']} style={{ width: '100%', maxWidth: 800 }}>
                         <TouchableOpacity
                             style={[styles.reportButton, { backgroundColor: colors.primary }]}

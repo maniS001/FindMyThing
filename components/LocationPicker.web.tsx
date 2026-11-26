@@ -406,14 +406,16 @@ export default function LocationPicker({
         <View style={styles.wrapper}>
             {label ? <Text style={[styles.label, { color: colors.text }]}>{label}</Text> : null}
 
+            <View style={{ position: 'relative', zIndex: 20 }}>
             <View style={[styles.inputContainer, { borderColor: isFocused ? colors.primary : colors.border, backgroundColor: colors.surface }]}>
-                <Search size={20} color={colors.textSecondary} style={styles.icon} />
+                <Search size={20} color={colors.textSecondary} style={[styles.icon, { marginTop: 2 }]} />
                 <TextInput
-                    style={[styles.input, { color: colors.text }]}
+                    style={[styles.input, { color: colors.text, height: Math.max(26, Math.min(132, Math.ceil(Math.max(1, query.length) / 34) * 22)) }]}
                     placeholder={placeholder}
                     placeholderTextColor={colors.textSecondary}
                     value={query}
                     onChangeText={searchPlaces}
+                    multiline
                     onFocus={() => {
                         setIsFocused(true);
                         if (query.trim().length >= 2 && results.length === 0) {
@@ -431,7 +433,7 @@ export default function LocationPicker({
                 />
                 {loading && <ActivityIndicator size="small" color={colors.primary} style={styles.icon} />}
                 {query.length > 0 && !loading && (
-                    <TouchableOpacity onPress={() => { setQuery(''); onChange(''); setResults([]); }}>
+                    <TouchableOpacity onPress={() => { setQuery(''); onChange(''); setResults([]); }} style={{ marginTop: 2 }}>
                         <X size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
                     </TouchableOpacity>
                 )}
@@ -541,6 +543,7 @@ export default function LocationPicker({
                     )}
                 </View>
             )}
+            </View>
 
             <Modal visible={mapModalVisible} animationType="slide" transparent>
                 <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.65)' }]}>
@@ -590,15 +593,16 @@ export default function LocationPicker({
 const styles = StyleSheet.create({
     wrapper: { marginBottom: 16, position: 'relative', zIndex: 10 },
     label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
-    inputContainer: { flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderRadius: 12, height: 52, paddingHorizontal: 16 },
+    inputContainer: { flexDirection: 'row', alignItems: 'flex-start', borderWidth: 1.5, borderRadius: 12, minHeight: 52, paddingHorizontal: 16, paddingVertical: 13 },
     icon: { marginRight: 10 },
-    input: { flex: 1, height: '100%', fontSize: 15, outlineStyle: 'none' } as any,
+    input: { flex: 1, minHeight: 26, fontSize: 15, lineHeight: 22, outlineStyle: 'none' } as any,
     actionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' },
     actionBtn: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
     actionText: { fontSize: 13, fontWeight: '600' },
     dropdown: {
         position: 'absolute',
-        top: 86,
+        top: '100%',
+        marginTop: 4,
         left: 0,
         right: 0,
         borderWidth: 1,

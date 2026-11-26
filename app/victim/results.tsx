@@ -7,7 +7,7 @@ import Button from '../../components/Button';
 import Card from '../../components/Card';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { addComplaint, Item, searchItems } from '../../store';
+import { addComplaint, Item, aiSearchItems } from '../../store';
 
 export default function SearchResults() {
     const params = useLocalSearchParams<{
@@ -40,7 +40,12 @@ export default function SearchResults() {
             if (params.name) {
                 setLoading(true);
                 try {
-                    const items = await searchItems(params.name);
+                    const items = await aiSearchItems({
+                        name: params.name.trim(),
+                        category: params.category,
+                        location: params.location?.trim(),
+                        description: params.description?.trim(),
+                    });
                     setResults(items);
                 } finally {
                     setLoading(false);

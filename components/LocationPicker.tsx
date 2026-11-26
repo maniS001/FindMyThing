@@ -210,12 +210,14 @@ export default function LocationPicker({
         <View style={styles.wrapper}>
             {label ? <Text style={[styles.label, { color: colors.text }]}>{label}</Text> : null}
 
-            <TouchableOpacity activeOpacity={0.8} onPress={() => { Keyboard.dismiss(); setMapMode(false); setModalVisible(true); }}>
+            <TouchableOpacity activeOpacity={0.8} onPress={() => { Keyboard.dismiss(); setQuery(value || ''); setMapMode(false); setModalVisible(true); }}>
                 <View pointerEvents="none">
                     <Input
                         placeholder={placeholder}
                         value={value}
                         editable={false}
+                        multiline
+                        style={{ height: undefined, minHeight: 52, paddingTop: 14, paddingBottom: 14, lineHeight: 22 }}
                         onChangeText={() => {}}
                     />
                 </View>
@@ -323,13 +325,15 @@ export default function LocationPicker({
                         ) : (
                             <View style={styles.searchContainer}>
                                 <View style={styles.inputWrapper}>
-                                    <Search size={20} color={colors.textSecondary} style={{ marginRight: 8 }} />
+                                    <Search size={20} color={colors.textSecondary} style={{ marginRight: 8, marginTop: 6 }} />
                                     <TextInput
                                         style={[styles.searchInput, { color: colors.text }]}
                                         placeholder="Search shop, temple, bus stand, address..."
                                         placeholderTextColor={colors.textSecondary}
                                         value={query}
                                         onChangeText={searchPlaces}
+                                        multiline
+                                        textAlignVertical="top"
                                         autoFocus
                                     />
                                     {loading && <ActivityIndicator color={colors.primary} size="small" />}
@@ -450,8 +454,8 @@ const styles = StyleSheet.create({
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1 },
     title: { fontSize: 17, fontWeight: 'bold' },
     searchContainer: { flex: 1 },
-    inputWrapper: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
-    searchInput: { flex: 1, fontSize: 16, height: 40 },
+    inputWrapper: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
+    searchInput: { flex: 1, fontSize: 16, minHeight: 40, maxHeight: 130, lineHeight: 22, paddingTop: 4 },
     actionRow: { flexDirection: 'row', padding: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
     actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10 },
     actionText: { marginLeft: 8, fontSize: 13, fontWeight: '600' },

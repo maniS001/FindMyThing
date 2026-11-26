@@ -119,7 +119,7 @@ export default function EditComplaint() {
                             : []),
                 });
                 setContactInfo(data.contactInfo || '');
-                setExposePhoneNumber(Boolean(data.exposePhoneNumber));
+                setExposePhoneNumber(Boolean(data.contactInfo?.trim()));
                 setDate(new Date(data.date));
 
                 if (data.targetCommunityId) {
@@ -202,7 +202,7 @@ export default function EditComplaint() {
                 date: date.toISOString().split('T')[0],
                 description: form.description,
                 contactInfo: contactInfo.trim() || undefined,
-                exposePhoneNumber: Boolean(exposePhoneNumber && contactInfo.trim()),
+                exposePhoneNumber: Boolean(contactInfo.trim()),
                 imageUris: base64Images,
                 notifyRadius: notificationType === 'RADIUS' ? parseInt(notifyRadius) || 1 : undefined,
                 targetCommunityId: notificationType === 'COMMUNITY' ? targetCommunityId || undefined : undefined,

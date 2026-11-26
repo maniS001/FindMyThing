@@ -1743,7 +1743,178 @@ app.post('/api/complaints', async (req, res) => {
 
 // ... (Rest of existing endpoints remain same)
 
+function filterVisibleItems<T extends {
+    targetCommunityId?: string | null;
+    targetOrganizationId?: string | null;
+    notifyRadius?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+}>(items: T[], currentUser: any): T[] {
+    return items.filter(item => {
+        if (item.targetCommunityId) {
+            if (!currentUser) return false;
+            const isMember = currentUser.memberships.some((m: any) =>
+                m.communityId === item.targetCommunityId &&
+                (m.role === 'MEMBER' || m.role === 'ADMIN')
+            );
+            if (!isMember) return false;
+        }
+        if (item.targetOrganizationId) {
+            if (!currentUser) return false;
+            const isAdmin = currentUser.orgAdmins.some((o: any) => o.organizationId === item.targetOrganizationId);
+            if (!isAdmin) return false;
+        }
+        if (item.notifyRadius && item.latitude && item.longitude && !item.targetCommunityId && !item.targetOrganizationId) {
+            if (!currentUser || !currentUser.latitude || !currentUser.longitude) return false;
+            const distance = calculateDistance(item.latitude, item.longitude, currentUser.latitude, currentUser.longitude);
+            if (distance > item.notifyRadius) return false;
+        }
+        return true;
+    });
+}
+
+function tokenizeSearchText(value?: string | null): string[] {
+    if (!value) return [];
+    const stopWords = new Set(['the', 'and', 'for', 'with', 'near', 'from', 'lost', 'found', 'item', 'my', 'a', 'an', 'in', 'at', 'on', 'of', 'to']);
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(t => t.length >= 2 && !stopWords.has(t));
+}
+
+function scoreItemLocally(item: any, query: { name: string; category?: string; location?: string; description?: string }): number {
+    const itemName = (item.name || '').toLowerCase();
+    const itemCat = (item.category || '').toLowerCase();
+    const itemLoc = (item.location || '').toLowerCase();
+    const itemDesc = (item.description || '').toLowerCase();
+    const qName = query.name.toLowerCase();
+    const qLoc = (query.location || '').toLowerCase();
+    let score = 0;
+    if (qName && (itemName.includes(qName) || qName.includes(itemName))) score += 50;
+    for (const tok of tokenizeSearchText(query.name)) {
+        if (itemName.includes(tok)) score += 30;
+        else if (itemDesc.includes(tok) || itemCat.includes(tok)) score += 12;
+    }
+    if (query.category && itemCat === query.category.toLowerCase()) score += 15;
+    for (const tok of tokenizeSearchText(qLoc)) {
+        if (itemLoc.includes(tok)) score += 15;
+    }
+    for (const tok of tokenizeSearchText(query.description)) {
+        if (itemDesc.includes(tok) || itemName.includes(tok)) score += 8;
+    }
+    return score;
+}
+
 // List Items (with search)
+
+// AI-Powered Semantic Item Search
+app.post('/api/items/ai-search', async (req, res) => {
+    try {
+        let currentUser: any = null;
+        const authHeader = req.headers['authorization'];
+        if (authHeader) {
+            const token = authHeader.split(' ')[1];
+            if (token) {
+                try {
+                    const decoded = jwt.verify(token, JWT_SECRET) as any;
+                    currentUser = await prisma.user.findUnique({
+                        where: { id: decoded.id },
+                        include: { memberships: true, orgAdmins: true }
+                    });
+                } catch (e) {
+                    // Ignore, continue as guest
+                }
+            }
+        }
+
+        const name = String(req.body?.name || '').trim();
+        const category = String(req.body?.category || '').trim();
+        const location = String(req.body?.location || '').trim();
+        const description = String(req.body?.description || '').trim();
+        const excludeClaimed = req.body?.excludeClaimed !== false;
+
+        if (!name && !description && !location) {
+            return res.json([]);
+        }
+
+        const where: any = {};
+        if (currentUser) {
+            where.userId = { not: currentUser.id };
+        }
+        if (excludeClaimed) {
+            where.status = { in: ['OPEN', 'REOPENED'] };
+        }
+
+        let items = await prisma.item.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            take: 80,
+            include: { questions: true },
+        });
+
+        items = filterVisibleItems(items, currentUser);
+        if (items.length === 0) {
+            return res.json([]);
+        }
+
+        const scoredLocal = items
+            .map(item => ({ item, score: scoreItemLocally(item, { name, category, location, description }) }))
+            .sort((a, b) => b.score - a.score);
+
+        // Send top candidates (mix of best local matches + recent items for semantic synonyms)
+        const candidatePool = scoredLocal.slice(0, 30).map(s => s.item);
+
+        if (process.env.GEMINI_API_KEY) {
+            try {
+                const compactCandidates = candidatePool.map(i => ({
+                    id: i.id,
+                    name: i.name,
+                    category: i.category,
+                    location: i.location,
+                    description: (i.description || '').slice(0, 180),
+                    date: i.date,
+                }));
+                const prompt = `You are a lost-and-found matching engine. Compare the user's LOST item query with the FOUND items list.
+LOST ITEM QUERY:
+- Name: "${name}"
+- Category: "${category}"
+- Location: "${location}"
+- Description: "${description}"
+
+FOUND ITEMS:
+${JSON.stringify(compactCandidates)}
+
+Return ONLY valid JSON: {"matches": [{"id": "<item id>", "score": <0-100>}]}.
+Include items that are likely the same or similar type of item (e.g. "BAG" matches "HAND BAG", "BACKPACK", "PURSE"; "PHONE" matches "MOBILE", "IPHONE"), factoring in name similarity, description details, category, and location proximity.
+Only include items with score >= 35, sorted from highest score to lowest.`;
+                const raw = await callGemini(prompt, true);
+                const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+                const parsed = JSON.parse(cleaned);
+                if (Array.isArray(parsed?.matches) && parsed.matches.length > 0) {
+                    const byId = new Map(candidatePool.map(i => [i.id, i]));
+                    const aiMatched = parsed.matches
+                        .filter((m: any) => m && typeof m.id === 'string' && (typeof m.score !== 'number' || m.score >= 35))
+                        .map((m: any) => byId.get(m.id))
+                        .filter(Boolean);
+                    if (aiMatched.length > 0) {
+                        return res.json(aiMatched);
+                    }
+                }
+            } catch (aiErr: any) {
+                console.log('AI search fallback to local fuzzy:', aiErr?.message);
+            }
+        }
+
+        // Local fuzzy fallback: require at least a name/token match (score >= 15)
+        const fallback = scoredLocal.filter(s => s.score >= 15).map(s => s.item);
+        return res.json(fallback);
+    } catch (error) {
+        console.error('AI search error:', error);
+        res.status(500).json({ error: 'Failed to search items' });
+    }
+});
+
 app.get('/api/items', async (req, res) => {
     try {
         let currentUser: any = null;
@@ -1799,33 +1970,7 @@ app.get('/api/items', async (req, res) => {
             include: { questions: true },
         });
 
-        items = items.filter(item => {
-            // Founder's Community constraint
-            if (item.targetCommunityId) {
-                if (!currentUser) return false;
-                const isMember = currentUser.memberships.some((m: any) => 
-                    m.communityId === item.targetCommunityId && 
-                    (m.role === 'MEMBER' || m.role === 'ADMIN')
-                );
-                if (!isMember) return false;
-            }
-            
-            // Founder's Organization constraint
-            if (item.targetOrganizationId) {
-                if (!currentUser) return false;
-                const isAdmin = currentUser.orgAdmins.some((o: any) => o.organizationId === item.targetOrganizationId);
-                if (!isAdmin) return false;
-            }
-
-            // Founder's Radius constraint
-            if (item.notifyRadius && item.latitude && item.longitude && !item.targetCommunityId && !item.targetOrganizationId) {
-                if (!currentUser || !currentUser.latitude || !currentUser.longitude) return false;
-                const distance = calculateDistance(item.latitude, item.longitude, currentUser.latitude, currentUser.longitude);
-                if (distance > item.notifyRadius) return false;
-            }
-
-            return true;
-        });
+        items = filterVisibleItems(items, currentUser);
 
         // Apply radius filter if provided and not filtering by community/org
         if (lat && lng && radius && !communityId && !orgId) {

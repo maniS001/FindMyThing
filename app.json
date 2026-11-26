@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.manikandan.findmything",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSContactsUsageDescription": "Allow FindMyThing to access your contacts to add members to your communities."
       }
     },
     "android": {
@@ -41,7 +42,8 @@
         "android.permission.CALL_PHONE",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.WAKE_LOCK",
-        "android.permission.USE_FULL_SCREEN_INTENT"
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.READ_CONTACTS"
       ]
     },
     "web": {
@@ -91,7 +93,13 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "@react-native-google-signin/google-signin",
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow FindMyThing to access your contacts to invite members to your community."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
@@ -105,4 +113,4 @@
     },
     "owner": "mani_s"
   }
-}
+}

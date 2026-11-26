@@ -112,10 +112,10 @@ export default function SearchLostItem() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    name: form.name,
+                    name: form.name.trim(),
                     category: form.category,
-                    description: form.description,
-                    location: form.location,
+                    description: form.description.trim(),
+                    location: form.location.trim(),
                     date: date.toISOString().split('T')[0]
                 }),
             });
@@ -139,11 +139,16 @@ export default function SearchLostItem() {
         }
         setAiLoading(false);
 
+        const trimmedPhone = form.contactInfo.trim();
         router.push({
             pathname: '/victim/results',
             params: {
                 ...form,
-                exposePhoneNumber: exposePhoneNumber && form.contactInfo.trim() ? 'true' : 'false',
+                name: form.name.trim(),
+                location: form.location.trim(),
+                description: form.description.trim(),
+                contactInfo: trimmedPhone,
+                exposePhoneNumber: trimmedPhone ? 'true' : 'false',
                 latitude: locationCoords ? String(locationCoords.lat) : '',
                 longitude: locationCoords ? String(locationCoords.lon) : '',
                 date: date.toISOString().split('T')[0],
